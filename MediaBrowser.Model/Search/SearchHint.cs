@@ -16,7 +16,7 @@ namespace MediaBrowser.Model.Search
         {
             Name = string.Empty;
             MatchedTerm = string.Empty;
-            MediaType = string.Empty;
+            MediaType = Jellyfin.Data.Enums.MediaType.Unknown;
             Artists = Array.Empty<string>();
         }
 
@@ -43,7 +43,7 @@ namespace MediaBrowser.Model.Search
         /// Gets or sets the matched term.
         /// </summary>
         /// <value>The matched term.</value>
-        public string MatchedTerm { get; set; }
+        public string? MatchedTerm { get; set; }
 
         /// <summary>
         /// Gets or sets the index number.
@@ -100,7 +100,7 @@ namespace MediaBrowser.Model.Search
         public BaseItemKind Type { get; set; }
 
         /// <summary>
-        /// Gets a value indicating whether this instance is folder.
+        /// Gets or sets a value indicating whether this instance is folder.
         /// </summary>
         /// <value><c>true</c> if this instance is folder; otherwise, <c>false</c>.</value>
         public bool? IsFolder { get; set; }
@@ -115,7 +115,7 @@ namespace MediaBrowser.Model.Search
         /// Gets or sets the type of the media.
         /// </summary>
         /// <value>The type of the media.</value>
-        public string MediaType { get; set; }
+        public MediaType MediaType { get; set; }
 
         /// <summary>
         /// Gets or sets the start date.

@@ -3,12 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using Jellyfin.Extensions;
 using MediaBrowser.Model.MediaInfo;
 using Microsoft.Extensions.Logging;
 using Nikse.SubtitleEdit.Core.Common;
-using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using SubtitleFormat = Nikse.SubtitleEdit.Core.SubtitleFormats.SubtitleFormat;
 
 namespace MediaBrowser.MediaEncoding.Subtitles
@@ -56,12 +54,23 @@ namespace MediaBrowser.MediaEncoding.Subtitles
                 {
                     break;
                 }
-
-                _logger.LogError(
-                    "{ErrorCount} errors encountered while parsing '{FileExtension}' subtitle using the {SubtitleFormatParser} format parser",
-                    subtitleFormat.ErrorCount,
-                    fileExtension,
-                    subtitleFormat.Name);
+                else if (subtitleFormat.TryGetErrors(out var errors))
+                {
+                    _logger.LogError(
+                        "{ErrorCount} errors encountered while parsing '{FileExtension}' subtitle using the {SubtitleFormatParser} format parser, errors: {Errors}",
+                        subtitleFormat.ErrorCount,
+                        fileExtension,
+                        subtitleFormat.Name,
+                        errors);
+                }
+                else
+                {
+                    _logger.LogError(
+                        "{ErrorCount} errors encountered while parsing '{FileExtension}' subtitle using the {SubtitleFormatParser} format parser",
+                        subtitleFormat.ErrorCount,
+                        fileExtension,
+                        subtitleFormat.Name);
+                }
             }
 
             if (subtitle.Paragraphs.Count == 0)
@@ -90,7 +99,7 @@ namespace MediaBrowser.MediaEncoding.Subtitles
         public bool SupportsFileExtension(string fileExtension)
             => _subtitleFormats.ContainsKey(fileExtension);
 
-        private IEnumerable<SubtitleFormat> GetSubtitleFormats()
+        private List<SubtitleFormat> GetSubtitleFormats()
         {
             var subtitleFormats = new List<SubtitleFormat>();
             var assembly = typeof(SubtitleFormat).Assembly;

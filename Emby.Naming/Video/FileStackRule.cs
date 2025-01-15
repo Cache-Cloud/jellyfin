@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 
 namespace Emby.Naming.Video;
@@ -17,7 +17,7 @@ public class FileStackRule
     /// <param name="isNumerical">Whether the file stack rule uses numerical or alphabetical numbering.</param>
     public FileStackRule(string token, bool isNumerical)
     {
-        _tokenRegex = new Regex(token, RegexOptions.IgnoreCase);
+        _tokenRegex = new Regex(token, RegexOptions.IgnoreCase | RegexOptions.Compiled);
         IsNumerical = isNumerical;
     }
 

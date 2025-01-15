@@ -15,6 +15,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
@@ -62,23 +63,16 @@ namespace Emby.Server.Implementations.MediaEncoder
         /// Determines whether [is eligible for chapter image extraction] [the specified video].
         /// </summary>
         /// <param name="video">The video.</param>
+        /// <param name="libraryOptions">The library options for the video.</param>
         /// <returns><c>true</c> if [is eligible for chapter image extraction] [the specified video]; otherwise, <c>false</c>.</returns>
-        private bool IsEligibleForChapterImageExtraction(Video video)
+        private bool IsEligibleForChapterImageExtraction(Video video, LibraryOptions libraryOptions)
         {
             if (video.IsPlaceHolder)
             {
                 return false;
             }
 
-            var libraryOptions = _libraryManager.GetLibraryOptions(video);
-            if (libraryOptions != null)
-            {
-                if (!libraryOptions.EnableChapterImageExtraction)
-                {
-                    return false;
-                }
-            }
-            else
+            if (libraryOptions is null || !libraryOptions.EnableChapterImageExtraction)
             {
                 return false;
             }
@@ -97,10 +91,41 @@ namespace Emby.Server.Implementations.MediaEncoder
             return video.DefaultVideoStreamIndex.HasValue;
         }
 
+        private long GetAverageDurationBetweenChapters(IReadOnlyList<ChapterInfo> chapters)
+        {
+            if (chapters.Count < 2)
+            {
+                return 0;
+            }
+
+            long sum = 0;
+            for (int i = 1; i < chapters.Count; i++)
+            {
+                sum += chapters[i].StartPositionTicks - chapters[i - 1].StartPositionTicks;
+            }
+
+            return sum / chapters.Count;
+        }
+
         public async Task<bool> RefreshChapterImages(Video video, IDirectoryService directoryService, IReadOnlyList<ChapterInfo> chapters, bool extractImages, bool saveChapters, CancellationToken cancellationToken)
         {
-            if (!IsEligibleForChapterImageExtraction(video))
+            if (chapters.Count == 0)
             {
+                return true;
+            }
+
+            var libraryOptions = _libraryManager.GetLibraryOptions(video);
+
+            if (!IsEligibleForChapterImageExtraction(video, libraryOptions))
+            {
+                extractImages = false;
+            }
+
+            var averageChapterDuration = GetAverageDurationBetweenChapters(chapters);
+            var threshold = TimeSpan.FromSeconds(1).Ticks;
+            if (averageChapterDuration < threshold)
+            {
+                _logger.LogInformation("Skipping chapter image extraction for {Video} as the average chapter duration {AverageDuration} was lower than the minimum threshold {Threshold}", video.Name, averageChapterDuration, threshold);
                 extractImages = false;
             }
 
@@ -179,6 +204,12 @@ namespace Emby.Server.Implementations.MediaEncoder
                     chapter.ImageDateModified = _fileSystem.GetLastWriteTimeUtc(path);
                     changesMade = true;
                 }
+                else if (libraryOptions?.EnableChapterImageExtraction != true)
+                {
+                    // We have an image for the current chapter but the user has disabled chapter image extraction -> delete this chapter's image
+                    chapter.ImagePath = null;
+                    changesMade = true;
+                }
             }
 
             if (saveChapters && changesMade)
@@ -220,7 +251,7 @@ namespace Emby.Server.Implementations.MediaEncoder
         {
             var deadImages = images
                 .Except(chapters.Select(i => i.ImagePath).Where(i => !string.IsNullOrEmpty(i)), StringComparer.OrdinalIgnoreCase)
-                .Where(i => BaseItem.SupportedImageExtensions.Contains(Path.GetExtension(i), StringComparison.OrdinalIgnoreCase))
+                .Where(i => BaseItem.SupportedImageExtensions.Contains(Path.GetExtension(i.AsSpan()), StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             foreach (var image in deadImages)

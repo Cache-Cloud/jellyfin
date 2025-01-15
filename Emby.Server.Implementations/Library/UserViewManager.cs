@@ -16,7 +16,6 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Model.Channels;
-using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.Library;
 using MediaBrowser.Model.Querying;
@@ -27,17 +26,15 @@ namespace Emby.Server.Implementations.Library
     {
         private readonly ILibraryManager _libraryManager;
         private readonly ILocalizationManager _localizationManager;
-        private readonly IUserManager _userManager;
 
         private readonly IChannelManager _channelManager;
         private readonly ILiveTvManager _liveTvManager;
         private readonly IServerConfigurationManager _config;
 
-        public UserViewManager(ILibraryManager libraryManager, ILocalizationManager localizationManager, IUserManager userManager, IChannelManager channelManager, ILiveTvManager liveTvManager, IServerConfigurationManager config)
+        public UserViewManager(ILibraryManager libraryManager, ILocalizationManager localizationManager, IChannelManager channelManager, ILiveTvManager liveTvManager, IServerConfigurationManager config)
         {
             _libraryManager = libraryManager;
             _localizationManager = localizationManager;
-            _userManager = userManager;
             _channelManager = channelManager;
             _liveTvManager = liveTvManager;
             _config = config;
@@ -45,12 +42,7 @@ namespace Emby.Server.Implementations.Library
 
         public Folder[] GetUserViews(UserViewQuery query)
         {
-            var user = _userManager.GetUserById(query.UserId);
-
-            if (user == null)
-            {
-                throw new ArgumentException("User Id specified in the query does not exist.", nameof(query));
-            }
+            var user = query.User;
 
             var folders = _libraryManager.GetUserRootFolder()
                 .GetChildren(user, true)
@@ -58,7 +50,6 @@ namespace Emby.Server.Implementations.Library
                 .ToList();
 
             var groupedFolders = new List<ICollectionFolder>();
-
             var list = new List<Folder>();
 
             foreach (var folder in folders)
@@ -66,19 +57,33 @@ namespace Emby.Server.Implementations.Library
                 var collectionFolder = folder as ICollectionFolder;
                 var folderViewType = collectionFolder?.CollectionType;
 
+                // Playlist library requires special handling because the folder only references user playlists
+                if (folderViewType == CollectionType.playlists)
+                {
+                    var items = folder.GetItemList(new InternalItemsQuery(user)
+                    {
+                        ParentId = folder.ParentId
+                    });
+
+                    if (!items.Any(item => item.IsVisible(user)))
+                    {
+                        continue;
+                    }
+                }
+
                 if (UserView.IsUserSpecific(folder))
                 {
                     list.Add(_libraryManager.GetNamedView(user, folder.Name, folder.Id, folderViewType, null));
                     continue;
                 }
 
-                if (collectionFolder != null && UserView.IsEligibleForGrouping(folder) && user.IsFolderGrouped(folder.Id))
+                if (collectionFolder is not null && UserView.IsEligibleForGrouping(folder) && user.IsFolderGrouped(folder.Id))
                 {
                     groupedFolders.Add(collectionFolder);
                     continue;
                 }
 
-                if (query.PresetViews.Contains(folderViewType ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+                if (query.PresetViews.Contains(folderViewType))
                 {
                     list.Add(GetUserView(folder, folderViewType, string.Empty));
                 }
@@ -88,16 +93,16 @@ namespace Emby.Server.Implementations.Library
                 }
             }
 
-            foreach (var viewType in new[] { CollectionType.Movies, CollectionType.TvShows })
+            foreach (var viewType in new[] { CollectionType.movies, CollectionType.tvshows })
             {
-                var parents = groupedFolders.Where(i => string.Equals(i.CollectionType, viewType, StringComparison.OrdinalIgnoreCase) || string.IsNullOrEmpty(i.CollectionType))
+                var parents = groupedFolders.Where(i => i.CollectionType == viewType || i.CollectionType is null)
                     .ToList();
 
                 if (parents.Count > 0)
                 {
-                    var localizationKey = string.Equals(viewType, CollectionType.TvShows, StringComparison.OrdinalIgnoreCase) ?
-                        "TvShows" :
-                        "Movies";
+                    var localizationKey = viewType == CollectionType.tvshows
+                        ? "TvShows"
+                        : "Movies";
 
                     list.Add(GetUserView(parents, viewType, localizationKey, string.Empty, user, query.PresetViews));
                 }
@@ -106,21 +111,21 @@ namespace Emby.Server.Implementations.Library
             if (_config.Configuration.EnableFolderView)
             {
                 var name = _localizationManager.GetLocalizedString("Folders");
-                list.Add(_libraryManager.GetNamedView(name, CollectionType.Folders, string.Empty));
+                list.Add(_libraryManager.GetNamedView(name, CollectionType.folders, string.Empty));
             }
 
             if (query.IncludeExternalContent)
             {
-                var channelResult = _channelManager.GetChannelsInternal(new ChannelQuery
+                var channelResult = _channelManager.GetChannelsInternalAsync(new ChannelQuery
                 {
-                    UserId = query.UserId
-                });
+                    UserId = user.Id
+                }).GetAwaiter().GetResult();
 
                 var channels = channelResult.Items;
 
                 list.AddRange(channels);
 
-                if (_liveTvManager.GetEnabledUsers().Select(i => i.Id).Contains(query.UserId))
+                if (_liveTvManager.GetEnabledUsers().Select(i => i.Id).Contains(user.Id))
                 {
                     list.Add(_liveTvManager.GetInternalLiveTvFolder(CancellationToken.None));
                 }
@@ -132,17 +137,15 @@ namespace Emby.Server.Implementations.Library
             }
 
             var sorted = _libraryManager.Sort(list, user, new[] { ItemSortBy.SortName }, SortOrder.Ascending).ToList();
-
             var orders = user.GetPreferenceValues<Guid>(PreferenceKind.OrderedViews);
 
             return list
                 .OrderBy(i =>
                 {
                     var index = Array.IndexOf(orders, i.Id);
-
                     if (index == -1
                         && i is UserView view
-                        && !view.DisplayParentId.Equals(default))
+                        && !view.DisplayParentId.IsEmpty())
                     {
                         index = Array.IndexOf(orders, view.DisplayParentId);
                     }
@@ -154,14 +157,14 @@ namespace Emby.Server.Implementations.Library
                 .ToArray();
         }
 
-        public UserView GetUserSubViewWithName(string name, Guid parentId, string type, string sortName)
+        public UserView GetUserSubViewWithName(string name, Guid parentId, CollectionType? type, string sortName)
         {
             var uniqueId = parentId + "subview" + type;
 
             return _libraryManager.GetNamedView(name, parentId, type, sortName, uniqueId);
         }
 
-        public UserView GetUserSubView(Guid parentId, string type, string localizationKey, string sortName)
+        public UserView GetUserSubView(Guid parentId, CollectionType? type, string localizationKey, string sortName)
         {
             var name = _localizationManager.GetLocalizedString(localizationKey);
 
@@ -170,15 +173,15 @@ namespace Emby.Server.Implementations.Library
 
         private Folder GetUserView(
             List<ICollectionFolder> parents,
-            string viewType,
+            CollectionType? viewType,
             string localizationKey,
             string sortName,
             User user,
-            string[] presetViews)
+            CollectionType?[] presetViews)
         {
-            if (parents.Count == 1 && parents.All(i => string.Equals(i.CollectionType, viewType, StringComparison.OrdinalIgnoreCase)))
+            if (parents.Count == 1 && parents.All(i => i.CollectionType == viewType))
             {
-                if (!presetViews.Contains(viewType, StringComparison.OrdinalIgnoreCase))
+                if (!presetViews.Contains(viewType))
                 {
                     return (Folder)parents[0];
                 }
@@ -190,16 +193,14 @@ namespace Emby.Server.Implementations.Library
             return _libraryManager.GetNamedView(user, name, viewType, sortName);
         }
 
-        public UserView GetUserView(Folder parent, string viewType, string sortName)
+        public UserView GetUserView(Folder parent, CollectionType? viewType, string sortName)
         {
             return _libraryManager.GetShadowView(parent, viewType, sortName);
         }
 
         public List<Tuple<BaseItem, List<BaseItem>>> GetLatestItems(LatestItemsQuery request, DtoOptions options)
         {
-            var user = _userManager.GetUserById(request.UserId);
-
-            var libraryItems = GetItemsForLatestItems(user, request, options);
+            var libraryItems = GetItemsForLatestItems(request.User, request, options);
 
             var list = new List<Tuple<BaseItem, List<BaseItem>>>();
 
@@ -208,15 +209,15 @@ namespace Emby.Server.Implementations.Library
                 // Only grab the index container for media
                 var container = item.IsFolder || !request.GroupItems ? null : item.LatestItemsIndexContainer;
 
-                if (container == null)
+                if (container is null)
                 {
                     list.Add(new Tuple<BaseItem, List<BaseItem>>(null, new List<BaseItem> { item }));
                 }
                 else
                 {
-                    var current = list.FirstOrDefault(i => i.Item1 != null && i.Item1.Id.Equals(container.Id));
+                    var current = list.FirstOrDefault(i => i.Item1 is not null && i.Item1.Id.Equals(container.Id));
 
-                    if (current != null)
+                    if (current is not null)
                     {
                         current.Item2.Add(item);
                     }
@@ -244,7 +245,7 @@ namespace Emby.Server.Implementations.Library
 
             var parents = new List<BaseItem>();
 
-            if (!parentId.Equals(default))
+            if (!parentId.IsEmpty())
             {
                 var parentItem = _libraryManager.GetItemById(parentId);
                 if (parentItem is Channel)
@@ -270,7 +271,7 @@ namespace Emby.Server.Implementations.Library
 
             var isPlayed = request.IsPlayed;
 
-            if (parents.OfType<ICollectionFolder>().Any(i => string.Equals(i.CollectionType, CollectionType.Music, StringComparison.OrdinalIgnoreCase)))
+            if (parents.OfType<ICollectionFolder>().Any(i => i.CollectionType == CollectionType.music))
             {
                 isPlayed = null;
             }
@@ -286,28 +287,28 @@ namespace Emby.Server.Implementations.Library
 
             if (parents.Count == 0)
             {
-                return new List<BaseItem>();
+                return Array.Empty<BaseItem>();
             }
 
             if (includeItemTypes.Length == 0)
             {
                 // Handle situations with the grouping setting, e.g. movies showing up in tv, etc.
                 // Thanks to mixed content libraries included in the UserView
-                var hasCollectionType = parents.OfType<UserView>().ToArray();
-                if (hasCollectionType.Length > 0)
+                var hasCollectionType = parents.OfType<UserView>().ToList();
+                if (hasCollectionType.Count > 0)
                 {
-                    if (hasCollectionType.All(i => string.Equals(i.CollectionType, CollectionType.Movies, StringComparison.OrdinalIgnoreCase)))
+                    if (hasCollectionType.All(i => i.CollectionType == CollectionType.movies))
                     {
                         includeItemTypes = new[] { BaseItemKind.Movie };
                     }
-                    else if (hasCollectionType.All(i => string.Equals(i.CollectionType, CollectionType.TvShows, StringComparison.OrdinalIgnoreCase)))
+                    else if (hasCollectionType.All(i => i.CollectionType == CollectionType.tvshows))
                     {
                         includeItemTypes = new[] { BaseItemKind.Episode };
                     }
                 }
             }
 
-            var mediaTypes = new List<string>();
+            var mediaTypes = new List<MediaType>();
 
             if (includeItemTypes.Length == 0)
             {
@@ -315,18 +316,18 @@ namespace Emby.Server.Implementations.Library
                 {
                     switch (parent.CollectionType)
                     {
-                        case CollectionType.Books:
+                        case CollectionType.books:
                             mediaTypes.Add(MediaType.Book);
                             mediaTypes.Add(MediaType.Audio);
                             break;
-                        case CollectionType.Music:
+                        case CollectionType.music:
                             mediaTypes.Add(MediaType.Audio);
                             break;
-                        case CollectionType.Photos:
+                        case CollectionType.photos:
                             mediaTypes.Add(MediaType.Photo);
                             mediaTypes.Add(MediaType.Video);
                             break;
-                        case CollectionType.HomeVideos:
+                        case CollectionType.homevideos:
                             mediaTypes.Add(MediaType.Photo);
                             mediaTypes.Add(MediaType.Video);
                             break;

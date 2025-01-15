@@ -19,7 +19,7 @@ namespace Jellyfin.Providers.Tests.MediaInfo
 {
     public class VideoImageProviderTests
     {
-        private static TheoryData<Video> GetImage_UnsupportedInput_ReturnsNoImage_TestData()
+        public static TheoryData<Video> GetImage_UnsupportedInput_ReturnsNoImage_TestData()
         {
             return new()
             {
@@ -34,7 +34,7 @@ namespace Jellyfin.Providers.Tests.MediaInfo
 
         [Theory]
         [MemberData(nameof(GetImage_UnsupportedInput_ReturnsNoImage_TestData))]
-        public async void GetImage_UnsupportedInput_ReturnsNoImage(Video input)
+        public async Task GetImage_UnsupportedInput_ReturnsNoImage(Video input)
         {
             var mediaSourceManager = GetMediaSourceManager(input, null, new List<MediaStream>());
             var videoImageProvider = new VideoImageProvider(mediaSourceManager, Mock.Of<IMediaEncoder>(), new NullLogger<VideoImageProvider>());
@@ -47,7 +47,7 @@ namespace Jellyfin.Providers.Tests.MediaInfo
         [Theory]
         [InlineData(1, 1)] // default not first stream
         [InlineData(5, 0)] // default out of valid range
-        public async void GetImage_DefaultVideoStreams_ReturnsCorrectStreamImage(int defaultIndex, int targetIndex)
+        public async Task GetImage_DefaultVideoStreams_ReturnsCorrectStreamImage(int defaultIndex, int targetIndex)
         {
             var input = new Movie { DefaultVideoStreamIndex = defaultIndex };
 
@@ -80,7 +80,7 @@ namespace Jellyfin.Providers.Tests.MediaInfo
         [Theory]
         [InlineData(null, 10)] // default time
         [InlineData(500, 50)] // calculated time
-        public async void GetImage_TimeSpan_SelectsCorrectTime(int? runTimeSeconds, long expectedSeconds)
+        public async Task GetImage_TimeSpan_SelectsCorrectTime(int? runTimeSeconds, long expectedSeconds)
         {
             MediaStream targetStream = new() { Type = MediaStreamType.Video, Index = 0 };
             var input = new Movie
@@ -110,7 +110,7 @@ namespace Jellyfin.Providers.Tests.MediaInfo
         private static IMediaSourceManager GetMediaSourceManager(Video item, MediaStream? defaultStream, List<MediaStream> mediaStreams)
         {
             var defaultStreamList = new List<MediaStream>();
-            if (defaultStream != null)
+            if (defaultStream is not null)
             {
                 defaultStreamList.Add(defaultStream);
             }

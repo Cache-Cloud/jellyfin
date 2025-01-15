@@ -4,7 +4,11 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Threading.Tasks;
+using Jellyfin.Data.Queries;
+using Jellyfin.Extensions;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Configuration;
+using MediaBrowser.Controller.Devices;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using Microsoft.AspNetCore.Http;
@@ -15,23 +19,29 @@ namespace Jellyfin.Server.Implementations.Security
 {
     public class AuthorizationContext : IAuthorizationContext
     {
-        private readonly JellyfinDbProvider _jellyfinDbProvider;
+        private readonly IDbContextFactory<JellyfinDbContext> _jellyfinDbProvider;
         private readonly IUserManager _userManager;
+        private readonly IDeviceManager _deviceManager;
         private readonly IServerApplicationHost _serverApplicationHost;
+        private readonly IServerConfigurationManager _configurationManager;
 
         public AuthorizationContext(
-            JellyfinDbProvider jellyfinDb,
+            IDbContextFactory<JellyfinDbContext> jellyfinDb,
             IUserManager userManager,
-            IServerApplicationHost serverApplicationHost)
+            IDeviceManager deviceManager,
+            IServerApplicationHost serverApplicationHost,
+            IServerConfigurationManager configurationManager)
         {
             _jellyfinDbProvider = jellyfinDb;
             _userManager = userManager;
+            _deviceManager = deviceManager;
             _serverApplicationHost = serverApplicationHost;
+            _configurationManager = configurationManager;
         }
 
         public Task<AuthorizationInfo> GetAuthorizationInfo(HttpContext requestContext)
         {
-            if (requestContext.Request.HttpContext.Items.TryGetValue("AuthorizationInfo", out var cached) && cached != null)
+            if (requestContext.Request.HttpContext.Items.TryGetValue("AuthorizationInfo", out var cached) && cached is not null)
             {
                 return Task.FromResult((AuthorizationInfo)cached); // Cache should never contain null
             }
@@ -49,19 +59,18 @@ namespace Jellyfin.Server.Implementations.Security
         /// <summary>
         /// Gets the authorization.
         /// </summary>
-        /// <param name="httpReq">The HTTP req.</param>
+        /// <param name="httpContext">The HTTP context.</param>
         /// <returns>Dictionary{System.StringSystem.String}.</returns>
-        private async Task<AuthorizationInfo> GetAuthorization(HttpContext httpReq)
+        private async Task<AuthorizationInfo> GetAuthorization(HttpContext httpContext)
         {
-            var auth = GetAuthorizationDictionary(httpReq);
-            var authInfo = await GetAuthorizationInfoFromDictionary(auth, httpReq.Request.Headers, httpReq.Request.Query).ConfigureAwait(false);
+            var authInfo = await GetAuthorizationInfo(httpContext.Request).ConfigureAwait(false);
 
-            httpReq.Request.HttpContext.Items["AuthorizationInfo"] = authInfo;
+            httpContext.Request.HttpContext.Items["AuthorizationInfo"] = authInfo;
             return authInfo;
         }
 
         private async Task<AuthorizationInfo> GetAuthorizationInfoFromDictionary(
-            IReadOnlyDictionary<string, string>? auth,
+            Dictionary<string, string>? auth,
             IHeaderDictionary headers,
             IQueryCollection queryString)
         {
@@ -71,7 +80,7 @@ namespace Jellyfin.Server.Implementations.Security
             string? version = null;
             string? token = null;
 
-            if (auth != null)
+            if (auth is not null)
             {
                 auth.TryGetValue("DeviceId", out deviceId);
                 auth.TryGetValue("Device", out deviceName);
@@ -80,13 +89,12 @@ namespace Jellyfin.Server.Implementations.Security
                 auth.TryGetValue("Token", out token);
             }
 
-#pragma warning disable CA1508 // string.IsNullOrEmpty(token) is always false.
-            if (string.IsNullOrEmpty(token))
+            if (_configurationManager.Configuration.EnableLegacyAuthorization && string.IsNullOrEmpty(token))
             {
                 token = headers["X-Emby-Token"];
             }
 
-            if (string.IsNullOrEmpty(token))
+            if (_configurationManager.Configuration.EnableLegacyAuthorization && string.IsNullOrEmpty(token))
             {
                 token = headers["X-MediaBrowser-Token"];
             }
@@ -96,8 +104,7 @@ namespace Jellyfin.Server.Implementations.Security
                 token = queryString["ApiKey"];
             }
 
-            // TODO deprecate this query parameter.
-            if (string.IsNullOrEmpty(token))
+            if (_configurationManager.Configuration.EnableLegacyAuthorization && string.IsNullOrEmpty(token))
             {
                 token = queryString["api_key"];
             }
@@ -118,130 +125,115 @@ namespace Jellyfin.Server.Implementations.Security
                 // Request doesn't contain a token.
                 return authInfo;
             }
-#pragma warning restore CA1508
 
             authInfo.HasToken = true;
-            await using var dbContext = _jellyfinDbProvider.CreateContext();
-            var device = await dbContext.Devices.FirstOrDefaultAsync(d => d.AccessToken == token).ConfigureAwait(false);
-
-            if (device != null)
+            var dbContext = await _jellyfinDbProvider.CreateDbContextAsync().ConfigureAwait(false);
+            await using (dbContext.ConfigureAwait(false))
             {
-                authInfo.IsAuthenticated = true;
-                var updateToken = false;
+                var device = _deviceManager.GetDevices(
+                    new DeviceQuery { AccessToken = token }).Items.FirstOrDefault();
 
-                // TODO: Remove these checks for IsNullOrWhiteSpace
-                if (string.IsNullOrWhiteSpace(authInfo.Client))
-                {
-                    authInfo.Client = device.AppName;
-                }
-
-                if (string.IsNullOrWhiteSpace(authInfo.DeviceId))
-                {
-                    authInfo.DeviceId = device.DeviceId;
-                }
-
-                // Temporary. TODO - allow clients to specify that the token has been shared with a casting device
-                var allowTokenInfoUpdate = !authInfo.Client.Contains("chromecast", StringComparison.OrdinalIgnoreCase);
-
-                if (string.IsNullOrWhiteSpace(authInfo.Device))
-                {
-                    authInfo.Device = device.DeviceName;
-                }
-                else if (!string.Equals(authInfo.Device, device.DeviceName, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (allowTokenInfoUpdate)
-                    {
-                        updateToken = true;
-                        device.DeviceName = authInfo.Device;
-                    }
-                }
-
-                if (string.IsNullOrWhiteSpace(authInfo.Version))
-                {
-                    authInfo.Version = device.AppVersion;
-                }
-                else if (!string.Equals(authInfo.Version, device.AppVersion, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (allowTokenInfoUpdate)
-                    {
-                        updateToken = true;
-                        device.AppVersion = authInfo.Version;
-                    }
-                }
-
-                if ((DateTime.UtcNow - device.DateLastActivity).TotalMinutes > 3)
-                {
-                    device.DateLastActivity = DateTime.UtcNow;
-                    updateToken = true;
-                }
-
-                authInfo.User = _userManager.GetUserById(device.UserId);
-
-                if (updateToken)
-                {
-                    dbContext.Devices.Update(device);
-                    await dbContext.SaveChangesAsync().ConfigureAwait(false);
-                }
-            }
-            else
-            {
-                var key = await dbContext.ApiKeys.FirstOrDefaultAsync(apiKey => apiKey.AccessToken == token).ConfigureAwait(false);
-                if (key != null)
+                if (device is not null)
                 {
                     authInfo.IsAuthenticated = true;
-                    authInfo.Client = key.Name;
-                    authInfo.Token = key.AccessToken;
+                    var updateToken = false;
+
+                    // TODO: Remove these checks for IsNullOrWhiteSpace
+                    if (string.IsNullOrWhiteSpace(authInfo.Client))
+                    {
+                        authInfo.Client = device.AppName;
+                    }
+
                     if (string.IsNullOrWhiteSpace(authInfo.DeviceId))
                     {
-                        authInfo.DeviceId = _serverApplicationHost.SystemId;
+                        authInfo.DeviceId = device.DeviceId;
                     }
+
+                    // Temporary. TODO - allow clients to specify that the token has been shared with a casting device
+                    var allowTokenInfoUpdate = !authInfo.Client.Contains("chromecast", StringComparison.OrdinalIgnoreCase);
 
                     if (string.IsNullOrWhiteSpace(authInfo.Device))
                     {
-                        authInfo.Device = _serverApplicationHost.Name;
+                        authInfo.Device = device.DeviceName;
+                    }
+                    else if (!string.Equals(authInfo.Device, device.DeviceName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (allowTokenInfoUpdate)
+                        {
+                            updateToken = true;
+                            device.DeviceName = authInfo.Device;
+                        }
                     }
 
                     if (string.IsNullOrWhiteSpace(authInfo.Version))
                     {
-                        authInfo.Version = _serverApplicationHost.ApplicationVersionString;
+                        authInfo.Version = device.AppVersion;
+                    }
+                    else if (!string.Equals(authInfo.Version, device.AppVersion, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (allowTokenInfoUpdate)
+                        {
+                            updateToken = true;
+                            device.AppVersion = authInfo.Version;
+                        }
                     }
 
-                    authInfo.IsApiKey = true;
+                    if ((DateTime.UtcNow - device.DateLastActivity).TotalMinutes > 3)
+                    {
+                        device.DateLastActivity = DateTime.UtcNow;
+                        updateToken = true;
+                    }
+
+                    authInfo.User = _userManager.GetUserById(device.UserId);
+
+                    if (updateToken)
+                    {
+                        await _deviceManager.UpdateDevice(device).ConfigureAwait(false);
+                    }
                 }
-            }
+                else
+                {
+                    var key = await dbContext.ApiKeys.FirstOrDefaultAsync(apiKey => apiKey.AccessToken == token).ConfigureAwait(false);
+                    if (key is not null)
+                    {
+                        authInfo.IsAuthenticated = true;
+                        authInfo.Client = key.Name;
+                        authInfo.Token = key.AccessToken;
+                        if (string.IsNullOrWhiteSpace(authInfo.DeviceId))
+                        {
+                            authInfo.DeviceId = _serverApplicationHost.SystemId;
+                        }
 
-            return authInfo;
+                        if (string.IsNullOrWhiteSpace(authInfo.Device))
+                        {
+                            authInfo.Device = _serverApplicationHost.Name;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(authInfo.Version))
+                        {
+                            authInfo.Version = _serverApplicationHost.ApplicationVersionString;
+                        }
+
+                        authInfo.IsApiKey = true;
+                    }
+                }
+
+                return authInfo;
+            }
         }
 
         /// <summary>
         /// Gets the auth.
         /// </summary>
-        /// <param name="httpReq">The HTTP req.</param>
+        /// <param name="httpReq">The HTTP request.</param>
         /// <returns>Dictionary{System.StringSystem.String}.</returns>
-        private static Dictionary<string, string>? GetAuthorizationDictionary(HttpContext httpReq)
+        private Dictionary<string, string>? GetAuthorizationDictionary(HttpRequest httpReq)
         {
-            var auth = httpReq.Request.Headers["X-Emby-Authorization"];
+            var auth = httpReq.Headers[HeaderNames.Authorization];
 
-            if (string.IsNullOrEmpty(auth))
+            if (_configurationManager.Configuration.EnableLegacyAuthorization && string.IsNullOrEmpty(auth))
             {
-                auth = httpReq.Request.Headers[HeaderNames.Authorization];
-            }
-
-            return auth.Count > 0 ? GetAuthorization(auth[0]) : null;
-        }
-
-        /// <summary>
-        /// Gets the auth.
-        /// </summary>
-        /// <param name="httpReq">The HTTP req.</param>
-        /// <returns>Dictionary{System.StringSystem.String}.</returns>
-        private static Dictionary<string, string>? GetAuthorizationDictionary(HttpRequest httpReq)
-        {
-            var auth = httpReq.Headers["X-Emby-Authorization"];
-
-            if (string.IsNullOrEmpty(auth))
-            {
-                auth = httpReq.Headers[HeaderNames.Authorization];
+                auth = httpReq.Headers["X-Emby-Authorization"];
             }
 
             return auth.Count > 0 ? GetAuthorization(auth[0]) : null;
@@ -252,7 +244,7 @@ namespace Jellyfin.Server.Implementations.Security
         /// </summary>
         /// <param name="authorizationHeader">The authorization header.</param>
         /// <returns>Dictionary{System.StringSystem.String}.</returns>
-        private static Dictionary<string, string>? GetAuthorization(ReadOnlySpan<char> authorizationHeader)
+        private Dictionary<string, string>? GetAuthorization(ReadOnlySpan<char> authorizationHeader)
         {
             var firstSpace = authorizationHeader.IndexOf(' ');
 
@@ -264,8 +256,10 @@ namespace Jellyfin.Server.Implementations.Security
 
             var name = authorizationHeader[..firstSpace];
 
-            if (!name.Equals("MediaBrowser", StringComparison.OrdinalIgnoreCase)
-                && !name.Equals("Emby", StringComparison.OrdinalIgnoreCase))
+            var validName = name.Equals("MediaBrowser", StringComparison.OrdinalIgnoreCase);
+            validName = validName || (_configurationManager.Configuration.EnableLegacyAuthorization && name.Equals("Emby", StringComparison.OrdinalIgnoreCase));
+
+            if (!validName)
             {
                 return null;
             }

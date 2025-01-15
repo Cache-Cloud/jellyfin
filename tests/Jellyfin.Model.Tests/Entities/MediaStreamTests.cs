@@ -83,6 +83,19 @@ namespace Jellyfin.Model.Tests.Entities
                 });
 
             data.Add(
+                "Title - EN - Hearing Impaired - Default - Forced - SRT",
+                new MediaStream
+                {
+                    Type = MediaStreamType.Subtitle,
+                    Title = "Title",
+                    Language = "EN",
+                    IsForced = true,
+                    IsDefault = true,
+                    IsHearingImpaired = true,
+                    Codec = "SRT"
+                });
+
+            data.Add(
                 "Title - AAC - Default - External",
                 new MediaStream
                 {
@@ -179,7 +192,7 @@ namespace Jellyfin.Model.Tests.Entities
         [InlineData(4090, 3070, false, "4K")]
         [InlineData(7680, 4320, false, "8K")]
         [InlineData(8190, 6140, false, "8K")]
-        public void GetResolutionText_Valid(int? width, int? height, bool interlaced, string expected)
+        public void GetResolutionText_Valid(int? width, int? height, bool interlaced, string? expected)
         {
             var mediaStream = new MediaStream()
             {

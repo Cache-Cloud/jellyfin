@@ -29,7 +29,7 @@ namespace Emby.Server.Implementations.Library
         }
 
         /// <inheritdoc />
-        public bool ShouldIgnore(FileSystemMetadata fileInfo, BaseItem parent)
+        public bool ShouldIgnore(FileSystemMetadata fileInfo, BaseItem? parent)
         {
             // Don't ignore application folders
             if (fileInfo.FullName.Contains(_serverApplicationPaths.RootFolderPath, StringComparison.InvariantCulture))
@@ -52,7 +52,7 @@ namespace Emby.Server.Implementations.Library
 
             if (fileInfo.IsDirectory)
             {
-                if (parent != null)
+                if (parent is not null)
                 {
                     // Ignore extras folders but allow it at the collection level
                     if (_namingOptions.AllExtrasTypesFolderNames.ContainsKey(filename)
@@ -65,7 +65,7 @@ namespace Emby.Server.Implementations.Library
             }
             else
             {
-                if (parent != null)
+                if (parent is not null)
                 {
                     // Don't resolve these into audio files
                     if (Path.GetFileNameWithoutExtension(filename.AsSpan()).Equals(BaseItem.ThemeSongFileName, StringComparison.Ordinal)

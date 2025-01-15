@@ -1,21 +1,21 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Session;
+using Microsoft.Extensions.Hosting;
 
 namespace Emby.Server.Implementations.EntryPoints
 {
-    public sealed class UserDataChangeNotifier : IServerEntryPoint
+    /// <summary>
+    /// <see cref="IHostedService"/> responsible for notifying users when associated item data is updated.
+    /// </summary>
+    public sealed class UserDataChangeNotifier : IHostedService, IDisposable
     {
         private const int UpdateDuration = 500;
 
@@ -23,21 +23,39 @@ namespace Emby.Server.Implementations.EntryPoints
         private readonly IUserDataManager _userDataManager;
         private readonly IUserManager _userManager;
 
-        private readonly Dictionary<Guid, List<BaseItem>> _changedItems = new Dictionary<Guid, List<BaseItem>>();
+        private readonly Dictionary<Guid, List<BaseItem>> _changedItems = new();
+        private readonly Lock _syncLock = new();
 
-        private readonly object _syncLock = new object();
         private Timer? _updateTimer;
 
-        public UserDataChangeNotifier(IUserDataManager userDataManager, ISessionManager sessionManager, IUserManager userManager)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="UserDataChangeNotifier"/> class.
+        /// </summary>
+        /// <param name="userDataManager">The <see cref="IUserDataManager"/>.</param>
+        /// <param name="sessionManager">The <see cref="ISessionManager"/>.</param>
+        /// <param name="userManager">The <see cref="IUserManager"/>.</param>
+        public UserDataChangeNotifier(
+            IUserDataManager userDataManager,
+            ISessionManager sessionManager,
+            IUserManager userManager)
         {
             _userDataManager = userDataManager;
             _sessionManager = sessionManager;
             _userManager = userManager;
         }
 
-        public Task RunAsync()
+        /// <inheritdoc />
+        public Task StartAsync(CancellationToken cancellationToken)
         {
             _userDataManager.UserDataSaved += OnUserDataManagerUserDataSaved;
+
+            return Task.CompletedTask;
+        }
+
+        /// <inheritdoc />
+        public Task StopAsync(CancellationToken cancellationToken)
+        {
+            _userDataManager.UserDataSaved -= OnUserDataManagerUserDataSaved;
 
             return Task.CompletedTask;
         }
@@ -51,7 +69,7 @@ namespace Emby.Server.Implementations.EntryPoints
 
             lock (_syncLock)
             {
-                if (_updateTimer == null)
+                if (_updateTimer is null)
                 {
                     _updateTimer = new Timer(
                         UpdateTimerCallback,
@@ -75,11 +93,11 @@ namespace Emby.Server.Implementations.EntryPoints
                 var baseItem = e.Item;
 
                 // Go up one level for indicators
-                if (baseItem != null)
+                if (baseItem is not null)
                 {
                     var parent = baseItem.GetOwner() ?? baseItem.GetParent();
 
-                    if (parent != null)
+                    if (parent is not null)
                     {
                         keys.Add(parent);
                     }
@@ -87,71 +105,57 @@ namespace Emby.Server.Implementations.EntryPoints
             }
         }
 
-        private void UpdateTimerCallback(object? state)
+        private async void UpdateTimerCallback(object? state)
         {
+            List<KeyValuePair<Guid, List<BaseItem>>> changes;
             lock (_syncLock)
             {
                 // Remove dupes in case some were saved multiple times
-                var changes = _changedItems.ToList();
+                changes = _changedItems.ToList();
                 _changedItems.Clear();
 
-                SendNotifications(changes, CancellationToken.None).GetAwaiter().GetResult();
-
-                if (_updateTimer != null)
+                if (_updateTimer is not null)
                 {
                     _updateTimer.Dispose();
                     _updateTimer = null;
                 }
             }
-        }
 
-        private async Task SendNotifications(List<KeyValuePair<Guid, List<BaseItem>>> changes, CancellationToken cancellationToken)
-        {
-            foreach (var pair in changes)
+            foreach (var (userId, changedItems) in changes)
             {
-                await SendNotifications(pair.Key, pair.Value, cancellationToken).ConfigureAwait(false);
+                await _sessionManager.SendMessageToUserSessions(
+                    [userId],
+                    SessionMessageType.UserDataChanged,
+                    () => GetUserDataChangeInfo(userId, changedItems),
+                    default).ConfigureAwait(false);
             }
-        }
-
-        private Task SendNotifications(Guid userId, List<BaseItem> changedItems, CancellationToken cancellationToken)
-        {
-            return _sessionManager.SendMessageToUserSessions(new List<Guid> { userId }, SessionMessageType.UserDataChanged, () => GetUserDataChangeInfo(userId, changedItems), cancellationToken);
         }
 
         private UserDataChangeInfo GetUserDataChangeInfo(Guid userId, List<BaseItem> changedItems)
         {
-            var user = _userManager.GetUserById(userId);
-
-            var dtoList = changedItems
-                .GroupBy(x => x.Id)
-                .Select(x => x.First())
-                .Select(i =>
-                {
-                    var dto = _userDataManager.GetUserDataDto(i, user);
-                    dto.ItemId = i.Id.ToString("N", CultureInfo.InvariantCulture);
-                    return dto;
-                })
-                .ToArray();
-
-            var userIdString = userId.ToString("N", CultureInfo.InvariantCulture);
+            var user = _userManager.GetUserById(userId)
+                ?? throw new ArgumentException("Invalid user ID", nameof(userId));
 
             return new UserDataChangeInfo
             {
-                UserId = userIdString,
-
-                UserDataList = dtoList
+                UserId = userId,
+                UserDataList = changedItems
+                    .DistinctBy(x => x.Id)
+                    .Select(i =>
+                    {
+                        var dto = _userDataManager.GetUserDataDto(i, user);
+                        dto.ItemId = i.Id;
+                        return dto;
+                    })
+                    .ToArray()
             };
         }
 
+        /// <inheritdoc />
         public void Dispose()
         {
-            if (_updateTimer != null)
-            {
-                _updateTimer.Dispose();
-                _updateTimer = null;
-            }
-
-            _userDataManager.UserDataSaved -= OnUserDataManagerUserDataSaved;
+            _updateTimer?.Dispose();
+            _updateTimer = null;
         }
     }
 }

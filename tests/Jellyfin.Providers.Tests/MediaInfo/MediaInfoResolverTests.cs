@@ -29,7 +29,7 @@ public class MediaInfoResolverTests
     public const string VideoDirectoryPath = "Test Data/Video";
     public const string VideoDirectoryRegex = @"Test Data[/\\]Video";
     public const string MetadataDirectoryPath = "library/00/00000000000000000000000000000000";
-    public const string MetadataDirectoryRegex = @"library.*";
+    public const string MetadataDirectoryRegex = "library.*";
 
     private readonly ILocalizationManager _localizationManager;
     private readonly MediaInfoResolver _subtitleResolver;
@@ -37,7 +37,7 @@ public class MediaInfoResolverTests
     public MediaInfoResolverTests()
     {
         // prep BaseItem and Video for calls made that expect managers
-        Video.LiveTvManager = Mock.Of<ILiveTvManager>();
+        Video.RecordingsManager = Mock.Of<IRecordingsManager>();
 
         var applicationPaths = new Mock<IServerApplicationPaths>().Object;
         var serverConfig = new Mock<IServerConfigurationManager>();
@@ -49,7 +49,7 @@ public class MediaInfoResolverTests
         var englishCultureDto = new CultureDto("English", "English", "en", new[] { "eng" });
 
         var localizationManager = new Mock<ILocalizationManager>(MockBehavior.Loose);
-        localizationManager.Setup(lm => lm.FindLanguageInfo(It.IsRegex(@"en.*", RegexOptions.IgnoreCase)))
+        localizationManager.Setup(lm => lm.FindLanguageInfo(It.IsRegex("en.*", RegexOptions.IgnoreCase)))
             .Returns(englishCultureDto);
         _localizationManager = localizationManager.Object;
 
@@ -79,7 +79,7 @@ public class MediaInfoResolverTests
     {
         // need a media source manager capable of returning something other than file protocol
         var mediaSourceManager = new Mock<IMediaSourceManager>();
-        mediaSourceManager.Setup(m => m.GetPathProtocol(It.IsRegex(@"http.*")))
+        mediaSourceManager.Setup(m => m.GetPathProtocol(It.IsRegex("http.*")))
             .Returns(MediaProtocol.Http);
         BaseItem.MediaSourceManager = mediaSourceManager.Object;
 
@@ -182,11 +182,11 @@ public class MediaInfoResolverTests
     [Theory]
     [InlineData("https://url.com/My.Video.mkv")]
     [InlineData(VideoDirectoryPath)] // valid but no files found for this test
-    public async void GetExternalStreams_BadPaths_ReturnsNoSubtitles(string path)
+    public async Task GetExternalStreams_BadPaths_ReturnsNoSubtitles(string path)
     {
         // need a media source manager capable of returning something other than file protocol
         var mediaSourceManager = new Mock<IMediaSourceManager>();
-        mediaSourceManager.Setup(m => m.GetPathProtocol(It.IsRegex(@"http.*")))
+        mediaSourceManager.Setup(m => m.GetPathProtocol(It.IsRegex("http.*")))
             .Returns(MediaProtocol.Http);
         BaseItem.MediaSourceManager = mediaSourceManager.Object;
 
@@ -209,7 +209,7 @@ public class MediaInfoResolverTests
         Assert.Empty(streams);
     }
 
-    private static TheoryData<string, MediaStream[], MediaStream[]> GetExternalStreams_MergeMetadata_HandlesOverridesCorrectly_Data()
+    public static TheoryData<string, MediaStream[], MediaStream[]> GetExternalStreams_MergeMetadata_HandlesOverridesCorrectly_Data()
     {
         var data = new TheoryData<string, MediaStream[], MediaStream[]>();
 
@@ -227,7 +227,7 @@ public class MediaInfoResolverTests
             });
 
         // filename has metadata
-        file = "My.Video.Title1.default.forced.en.srt";
+        file = "My.Video.Title1.default.forced.sdh.en.srt";
         data.Add(
             file,
             new[]
@@ -236,7 +236,7 @@ public class MediaInfoResolverTests
             },
             new[]
             {
-                CreateMediaStream(VideoDirectoryPath + "/" + file, "eng", "Title1", 0, true, true)
+                CreateMediaStream(VideoDirectoryPath + "/" + file, "eng", "Title1", 0, true, true, true)
             });
 
         // single stream with metadata
@@ -245,15 +245,15 @@ public class MediaInfoResolverTests
             file,
             new[]
             {
-                CreateMediaStream(VideoDirectoryPath + "/" + file, "eng", "Title", 0, true, true)
+                CreateMediaStream(VideoDirectoryPath + "/" + file, "eng", "Title", 0, true, true, true)
             },
             new[]
             {
-                CreateMediaStream(VideoDirectoryPath + "/" + file, "eng", "Title", 0, true, true)
+                CreateMediaStream(VideoDirectoryPath + "/" + file, "eng", "Title", 0, true, true, true)
             });
 
         // stream wins for title/language, filename wins for flags when conflicting
-        file = "My.Video.Title2.default.forced.en.srt";
+        file = "My.Video.Title2.default.forced.sdh.en.srt";
         data.Add(
             file,
             new[]
@@ -262,7 +262,7 @@ public class MediaInfoResolverTests
             },
             new[]
             {
-                CreateMediaStream(VideoDirectoryPath + "/" + file, "fra", "Metadata", 0, true, true)
+                CreateMediaStream(VideoDirectoryPath + "/" + file, "fra", "Metadata", 0, true, true, true)
             });
 
         // multiple stream with metadata - filename flags ignored but other data filled in when missing from stream
@@ -285,7 +285,7 @@ public class MediaInfoResolverTests
 
     [Theory]
     [MemberData(nameof(GetExternalStreams_MergeMetadata_HandlesOverridesCorrectly_Data))]
-    public async void GetExternalStreams_MergeMetadata_HandlesOverridesCorrectly(string file, MediaStream[] inputStreams, MediaStream[] expectedStreams)
+    public async Task GetExternalStreams_MergeMetadata_HandlesOverridesCorrectly(string file, MediaStream[] inputStreams, MediaStream[] expectedStreams)
     {
         BaseItem.MediaSourceManager = Mock.Of<IMediaSourceManager>();
 
@@ -324,6 +324,7 @@ public class MediaInfoResolverTests
             Assert.Equal(expected.Path, actual.Path);
             Assert.Equal(expected.IsDefault, actual.IsDefault);
             Assert.Equal(expected.IsForced, actual.IsForced);
+            Assert.Equal(expected.IsHearingImpaired, actual.IsHearingImpaired);
             Assert.Equal(expected.Language, actual.Language);
             Assert.Equal(expected.Title, actual.Title);
         }
@@ -334,7 +335,7 @@ public class MediaInfoResolverTests
     [InlineData(1, 2)]
     [InlineData(2, 1)]
     [InlineData(2, 2)]
-    public async void GetExternalStreams_StreamIndex_HandlesFilesAndContainers(int fileCount, int streamCount)
+    public async Task GetExternalStreams_StreamIndex_HandlesFilesAndContainers(int fileCount, int streamCount)
     {
         BaseItem.MediaSourceManager = Mock.Of<IMediaSourceManager>();
 
@@ -396,7 +397,7 @@ public class MediaInfoResolverTests
         }
     }
 
-    private static MediaStream CreateMediaStream(string path, string? language, string? title, int index, bool isForced = false, bool isDefault = false)
+    private static MediaStream CreateMediaStream(string path, string? language, string? title, int index, bool isForced = false, bool isDefault = false, bool isHearingImpaired = false)
     {
         return new MediaStream
         {
@@ -405,6 +406,7 @@ public class MediaInfoResolverTests
             Path = path,
             IsDefault = isDefault,
             IsForced = isForced,
+            IsHearingImpaired = isHearingImpaired,
             Language = language,
             Title = title
         };

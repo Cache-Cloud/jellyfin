@@ -54,7 +54,7 @@ namespace MediaBrowser.Controller.Entities.Audio
         public string AlbumArtist => AlbumArtists.FirstOrDefault();
 
         [JsonIgnore]
-        public override bool SupportsPeople => false;
+        public override bool SupportsPeople => true;
 
         /// <summary>
         /// Gets the tracks.
@@ -138,7 +138,7 @@ namespace MediaBrowser.Controller.Entities.Audio
 
             var artist = GetMusicArtist(new DtoOptions(false));
 
-            if (artist != null)
+            if (artist is not null)
             {
                 id.ArtistProviderIds = artist.ProviderIds;
             }
@@ -169,8 +169,7 @@ namespace MediaBrowser.Controller.Entities.Audio
 
             var childUpdateType = ItemUpdateType.None;
 
-            // Refresh songs only and not m3u files in album folder
-            foreach (var item in items.OfType<Audio>())
+            foreach (var item in items)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -186,8 +185,10 @@ namespace MediaBrowser.Controller.Entities.Audio
             var parentRefreshOptions = refreshOptions;
             if (childUpdateType > ItemUpdateType.None)
             {
-                parentRefreshOptions = new MetadataRefreshOptions(refreshOptions);
-                parentRefreshOptions.MetadataRefreshMode = MetadataRefreshMode.FullRefresh;
+                parentRefreshOptions = new MetadataRefreshOptions(refreshOptions)
+                {
+                    MetadataRefreshMode = MetadataRefreshMode.FullRefresh
+                };
             }
 
             // Refresh current item

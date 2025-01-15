@@ -1,5 +1,3 @@
-#nullable disable
-
 #pragma warning disable CS1591
 
 using System;
@@ -35,41 +33,37 @@ namespace MediaBrowser.Providers.Subtitles
         private readonly IMediaSourceManager _mediaSourceManager;
         private readonly ILocalizationManager _localization;
 
-        private ISubtitleProvider[] _subtitleProviders;
+        private readonly ISubtitleProvider[] _subtitleProviders;
 
         public SubtitleManager(
             ILogger<SubtitleManager> logger,
             IFileSystem fileSystem,
             ILibraryMonitor monitor,
             IMediaSourceManager mediaSourceManager,
-            ILocalizationManager localizationManager)
+            ILocalizationManager localizationManager,
+            IEnumerable<ISubtitleProvider> subtitleProviders)
         {
             _logger = logger;
             _fileSystem = fileSystem;
             _monitor = monitor;
             _mediaSourceManager = mediaSourceManager;
             _localization = localizationManager;
-        }
-
-        /// <inheritdoc />
-        public event EventHandler<SubtitleDownloadFailureEventArgs> SubtitleDownloadFailure;
-
-        /// <inheritdoc />
-        public void AddParts(IEnumerable<ISubtitleProvider> subtitleProviders)
-        {
             _subtitleProviders = subtitleProviders
                 .OrderBy(i => i is IHasOrder hasOrder ? hasOrder.Order : 0)
                 .ToArray();
         }
 
         /// <inheritdoc />
+        public event EventHandler<SubtitleDownloadFailureEventArgs>? SubtitleDownloadFailure;
+
+        /// <inheritdoc />
         public async Task<RemoteSubtitleInfo[]> SearchSubtitles(SubtitleSearchRequest request, CancellationToken cancellationToken)
         {
-            if (request.Language != null)
+            if (request.Language is not null)
             {
                 var culture = _localization.FindLanguageInfo(request.Language);
 
-                if (culture != null)
+                if (culture is not null)
                 {
                     request.TwoLetterISOLanguageName = culture.TwoLetterISOLanguageName;
                 }
@@ -80,7 +74,7 @@ namespace MediaBrowser.Providers.Subtitles
                 .Where(i => i.SupportedMediaTypes.Contains(contentType) && !request.DisabledSubtitleFetchers.Contains(i.Name, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(i =>
                 {
-                    var index = request.SubtitleFetcherOrder.ToList().IndexOf(i.Name);
+                    var index = request.SubtitleFetcherOrder.IndexOf(i.Name);
                     return index == -1 ? int.MaxValue : index;
                 })
                 .ToArray();
@@ -123,7 +117,7 @@ namespace MediaBrowser.Providers.Subtitles
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error downloading subtitles from {0}", i.Name);
+                    _logger.LogError(ex, "Error downloading subtitles from {Name}", i.Name);
                     return Array.Empty<RemoteSubtitleInfo>();
                 }
             });
@@ -188,90 +182,100 @@ namespace MediaBrowser.Providers.Subtitles
         {
             var saveInMediaFolder = libraryOptions.SaveSubtitlesWithMedia;
 
-            await using var stream = response.Stream;
-            await using var memoryStream = new MemoryStream();
-            await stream.CopyToAsync(memoryStream).ConfigureAwait(false);
-            memoryStream.Position = 0;
-
-            var savePaths = new List<string>();
-            var saveFileName = Path.GetFileNameWithoutExtension(video.Path) + "." + response.Language.ToLowerInvariant();
-
-            if (response.IsForced)
+            var memoryStream = new MemoryStream();
+            await using (memoryStream.ConfigureAwait(false))
             {
-                saveFileName += ".forced";
-            }
-
-            saveFileName += "." + response.Format.ToLowerInvariant();
-
-            if (saveInMediaFolder)
-            {
-                var mediaFolderPath = Path.GetFullPath(Path.Combine(video.ContainingFolderPath, saveFileName));
-                // TODO: Add some error handling to the API user: return BadRequest("Could not save subtitle, bad path.");
-                if (mediaFolderPath.StartsWith(video.ContainingFolderPath, StringComparison.Ordinal))
+                var stream = response.Stream;
+                await using (stream.ConfigureAwait(false))
                 {
+                    await stream.CopyToAsync(memoryStream).ConfigureAwait(false);
+                    memoryStream.Position = 0;
+                }
+
+                var savePaths = new List<string>();
+                var saveFileName = Path.GetFileNameWithoutExtension(video.Path) + "." + response.Language.ToLowerInvariant();
+
+                if (response.IsForced)
+                {
+                    saveFileName += ".forced";
+                }
+
+                if (response.IsHearingImpaired)
+                {
+                    saveFileName += ".sdh";
+                }
+
+                if (saveInMediaFolder)
+                {
+                    var mediaFolderPath = Path.GetFullPath(Path.Combine(video.ContainingFolderPath, saveFileName));
                     savePaths.Add(mediaFolderPath);
                 }
-            }
 
-            var internalPath = Path.GetFullPath(Path.Combine(video.GetInternalMetadataPath(), saveFileName));
+                var internalPath = Path.GetFullPath(Path.Combine(video.GetInternalMetadataPath(), saveFileName));
 
-            // TODO: Add some error to the user: return BadRequest("Could not save subtitle, bad path.");
-            if (internalPath.StartsWith(video.GetInternalMetadataPath(), StringComparison.Ordinal))
-            {
                 savePaths.Add(internalPath);
-            }
 
-            if (savePaths.Count > 0)
-            {
-                await TrySaveToFiles(memoryStream, savePaths).ConfigureAwait(false);
-            }
-            else
-            {
-                _logger.LogError("An uploaded subtitle could not be saved because the resulting paths were invalid.");
+                await TrySaveToFiles(memoryStream, savePaths, video, response.Format.ToLowerInvariant()).ConfigureAwait(false);
             }
         }
 
-        private async Task TrySaveToFiles(Stream stream, List<string> savePaths)
+        private async Task TrySaveToFiles(Stream stream, List<string> savePaths, Video video, string extension)
         {
-            List<Exception> exs = null;
+            List<Exception>? exs = null;
 
             foreach (var savePath in savePaths)
             {
-                _logger.LogInformation("Saving subtitles to {SavePath}", savePath);
-
-                _monitor.ReportFileSystemChangeBeginning(savePath);
-
+                var path = savePath + "." + extension;
                 try
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(savePath));
-
-                    var fileOptions = AsyncFile.WriteOptions;
-                    fileOptions.Mode = FileMode.CreateNew;
-                    fileOptions.PreallocationSize = stream.Length;
-                    var fs = new FileStream(savePath, fileOptions);
-                    await using (fs.ConfigureAwait(false))
+                    if (path.StartsWith(video.ContainingFolderPath, StringComparison.Ordinal)
+                            || path.StartsWith(video.GetInternalMetadataPath(), StringComparison.Ordinal))
                     {
-                        await stream.CopyToAsync(fs).ConfigureAwait(false);
-                    }
+                        var fileExists = File.Exists(path);
+                        var counter = 0;
 
-                    return;
+                        while (fileExists)
+                        {
+                            path = string.Format(CultureInfo.InvariantCulture, "{0}.{1}.{2}", savePath, counter, extension);
+                            fileExists = File.Exists(path);
+                            counter++;
+                        }
+
+                        _logger.LogInformation("Saving subtitles to {SavePath}", path);
+                        _monitor.ReportFileSystemChangeBeginning(path);
+
+                        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? throw new InvalidOperationException("Path can't be a root directory."));
+
+                        var fileOptions = AsyncFile.WriteOptions;
+                        fileOptions.Mode = FileMode.CreateNew;
+                        fileOptions.PreallocationSize = stream.Length;
+                        var fs = new FileStream(path, fileOptions);
+                        await using (fs.ConfigureAwait(false))
+                        {
+                            await stream.CopyToAsync(fs).ConfigureAwait(false);
+                        }
+
+                        return;
+                    }
+                    else
+                    {
+                        // TODO: Add some error handling to the API user: return BadRequest("Could not save subtitle, bad path.");
+                        _logger.LogError("An uploaded subtitle could not be saved because the resulting path was invalid.");
+                    }
                 }
                 catch (Exception ex)
                 {
-// Bug in analyzer -- https://github.com/dotnet/roslyn-analyzers/issues/5160
-#pragma warning disable CA1508
-                    (exs ??= new List<Exception>()).Add(ex);
-#pragma warning restore CA1508
+                    (exs ??= []).Add(ex);
                 }
                 finally
                 {
-                    _monitor.ReportFileSystemChangeComplete(savePath, false);
+                    _monitor.ReportFileSystemChangeComplete(path, false);
                 }
 
                 stream.Position = 0;
             }
 
-            if (exs != null)
+            if (exs is not null)
             {
                 throw new AggregateException(exs);
             }

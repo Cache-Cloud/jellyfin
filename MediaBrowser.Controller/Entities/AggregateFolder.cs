@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Extensions;
 using MediaBrowser.Controller.IO;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
@@ -22,7 +23,7 @@ namespace MediaBrowser.Controller.Entities
     /// </summary>
     public class AggregateFolder : Folder
     {
-        private readonly object _childIdsLock = new object();
+        private readonly Lock _childIdsLock = new();
 
         /// <summary>
         /// The _virtual children.
@@ -67,14 +68,14 @@ namespace MediaBrowser.Controller.Entities
         {
             lock (_childIdsLock)
             {
-                if (_childrenIds == null || _childrenIds.Length == 0)
+                if (_childrenIds is null || _childrenIds.Length == 0)
                 {
                     var list = base.LoadChildren();
                     _childrenIds = list.Select(i => i.Id).ToArray();
                     return list;
                 }
 
-                return _childrenIds.Select(LibraryManager.GetItemById).Where(i => i != null).ToList();
+                return _childrenIds.Select(LibraryManager.GetItemById).Where(i => i is not null).ToList();
             }
         }
 
@@ -120,7 +121,7 @@ namespace MediaBrowser.Controller.Entities
 
             var path = ContainingFolderPath;
 
-            var args = new ItemResolveArgs(ConfigurationManager.ApplicationPaths, directoryService)
+            var args = new ItemResolveArgs(ConfigurationManager.ApplicationPaths, LibraryManager)
             {
                 FileInfo = FileSystem.GetDirectoryInfo(path)
             };
@@ -154,11 +155,11 @@ namespace MediaBrowser.Controller.Entities
             return base.GetNonCachedChildren(directoryService).Concat(_virtualChildren);
         }
 
-        protected override async Task ValidateChildrenInternal(IProgress<double> progress, bool recursive, bool refreshChildMetadata, MetadataRefreshOptions refreshOptions, IDirectoryService directoryService, CancellationToken cancellationToken)
+        protected override async Task ValidateChildrenInternal(IProgress<double> progress, bool recursive, bool refreshChildMetadata, bool allowRemoveRoot, MetadataRefreshOptions refreshOptions, IDirectoryService directoryService, CancellationToken cancellationToken)
         {
             ClearCache();
 
-            await base.ValidateChildrenInternal(progress, recursive, refreshChildMetadata, refreshOptions, directoryService, cancellationToken)
+            await base.ValidateChildrenInternal(progress, recursive, refreshChildMetadata, allowRemoveRoot, refreshOptions, directoryService, cancellationToken)
                 .ConfigureAwait(false);
 
             ClearCache();
@@ -171,10 +172,7 @@ namespace MediaBrowser.Controller.Entities
         /// <exception cref="ArgumentNullException">Throws if child is null.</exception>
         public void AddVirtualChild(BaseItem child)
         {
-            if (child == null)
-            {
-                throw new ArgumentNullException(nameof(child));
-            }
+            ArgumentNullException.ThrowIfNull(child);
 
             _virtualChildren.Add(child);
         }
@@ -187,7 +185,7 @@ namespace MediaBrowser.Controller.Entities
         /// <exception cref="ArgumentNullException">The id is empty.</exception>
         public BaseItem FindVirtualChild(Guid id)
         {
-            if (id.Equals(default))
+            if (id.IsEmpty())
             {
                 throw new ArgumentNullException(nameof(id));
             }

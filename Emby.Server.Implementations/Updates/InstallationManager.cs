@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Events;
+using Jellyfin.Extensions;
 using Jellyfin.Extensions.Json;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Net;
@@ -47,7 +48,7 @@ namespace Emby.Server.Implementations.Updates
         /// </summary>
         /// <value>The application host.</value>
         private readonly IServerApplicationHost _applicationHost;
-        private readonly object _currentInstallationsLock = new object();
+        private readonly Lock _currentInstallationsLock = new();
 
         /// <summary>
         /// The current installations.
@@ -102,7 +103,7 @@ namespace Emby.Server.Implementations.Updates
                 PackageInfo[]? packages = await _httpClientFactory.CreateClient(NamedClient.Default)
                         .GetFromJsonAsync<PackageInfo[]>(new Uri(manifest), _jsonSerializerOptions, cancellationToken).ConfigureAwait(false);
 
-                if (packages == null)
+                if (packages is null)
                 {
                     return Array.Empty<PackageInfo>();
                 }
@@ -168,7 +169,7 @@ namespace Emby.Server.Implementations.Updates
             var result = new List<PackageInfo>();
             foreach (RepositoryInfo repository in _config.Configuration.PluginRepositories)
             {
-                if (repository.Enabled && repository.Url != null)
+                if (repository.Enabled && repository.Url is not null)
                 {
                     // Where repositories have the same content, the details from the first is taken.
                     foreach (var package in await GetPackages(repository.Name ?? "Unnamed Repo", repository.Url, true, cancellationToken).ConfigureAwait(true))
@@ -181,9 +182,9 @@ namespace Emby.Server.Implementations.Updates
                             var version = package.Versions[i];
 
                             var plugin = _pluginManager.GetPlugin(package.Id, version.VersionNumber);
-                            if (plugin != null)
+                            if (plugin is not null)
                             {
-                                await _pluginManager.GenerateManifest(package, version.VersionNumber, plugin.Path, plugin.Manifest.Status).ConfigureAwait(false);
+                                await _pluginManager.PopulateManifest(package, version.VersionNumber, plugin.Path, plugin.Manifest.Status).ConfigureAwait(false);
                             }
 
                             // Remove versions with a target ABI greater then the current application version.
@@ -199,7 +200,7 @@ namespace Emby.Server.Implementations.Updates
                             continue;
                         }
 
-                        if (existing != null)
+                        if (existing is not null)
                         {
                             // Assumption is both lists are ordered, so slot these into the correct place.
                             MergeSortedList(existing.Versions, package.Versions);
@@ -222,17 +223,17 @@ namespace Emby.Server.Implementations.Updates
             Guid id = default,
             Version? specificVersion = null)
         {
-            if (name != null)
+            if (name is not null)
             {
                 availablePackages = availablePackages.Where(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             }
 
-            if (!id.Equals(default))
+            if (!id.IsEmpty())
             {
                 availablePackages = availablePackages.Where(x => x.Id.Equals(id));
             }
 
-            if (specificVersion != null)
+            if (specificVersion is not null)
             {
                 availablePackages = availablePackages.Where(x => x.Versions.Any(y => y.VersionNumber.Equals(specificVersion)));
             }
@@ -251,7 +252,7 @@ namespace Emby.Server.Implementations.Updates
             var package = FilterPackages(availablePackages, name, id, specificVersion).FirstOrDefault();
 
             // Package not found in repository
-            if (package == null)
+            if (package is null)
             {
                 yield break;
             }
@@ -260,11 +261,11 @@ namespace Emby.Server.Implementations.Updates
             var availableVersions = package.Versions
                 .Where(x => string.IsNullOrEmpty(x.TargetAbi) || Version.Parse(x.TargetAbi) <= appVer);
 
-            if (specificVersion != null)
+            if (specificVersion is not null)
             {
                 availableVersions = availableVersions.Where(x => x.VersionNumber.Equals(specificVersion));
             }
-            else if (minVersion != null)
+            else if (minVersion is not null)
             {
                 availableVersions = availableVersions.Where(x => x.VersionNumber >= minVersion);
             }
@@ -294,10 +295,7 @@ namespace Emby.Server.Implementations.Updates
         /// <inheritdoc />
         public async Task InstallPackage(InstallationInfo package, CancellationToken cancellationToken)
         {
-            if (package == null)
-            {
-                throw new ArgumentNullException(nameof(package));
-            }
+            ArgumentNullException.ThrowIfNull(package);
 
             var innerCancellationTokenSource = new CancellationTokenSource();
 
@@ -324,9 +322,15 @@ namespace Emby.Server.Implementations.Updates
                 }
 
                 _completedInstallationsInternal.Add(package);
-                await _eventManager.PublishAsync(isUpdate
-                    ? (GenericEventArgs<InstallationInfo>)new PluginUpdatedEventArgs(package)
-                    : new PluginInstalledEventArgs(package)).ConfigureAwait(false);
+
+                if (isUpdate)
+                {
+                    await _eventManager.PublishAsync(new PluginUpdatedEventArgs(package)).ConfigureAwait(false);
+                }
+                else
+                {
+                    await _eventManager.PublishAsync(new PluginInstalledEventArgs(package)).ConfigureAwait(false);
+                }
 
                 _applicationHost.NotifyPendingRestart();
             }
@@ -373,7 +377,7 @@ namespace Emby.Server.Implementations.Updates
         /// <param name="plugin">The <see cref="LocalPlugin"/> to uninstall.</param>
         public void UninstallPlugin(LocalPlugin plugin)
         {
-            if (plugin == null)
+            if (plugin is null)
             {
                 return;
             }
@@ -498,7 +502,7 @@ namespace Emby.Server.Implementations.Updates
                 var compatibleVersions = GetCompatibleVersions(pluginCatalog, plugin.Name, plugin.Id, minVersion: plugin.Version);
                 var version = compatibleVersions.FirstOrDefault(y => y.Version > plugin.Version);
 
-                if (version != null && CompletedInstallations.All(x => !x.Id.Equals(version.Id)))
+                if (version is not null && CompletedInstallations.All(x => !x.Id.Equals(version.Id)))
                 {
                     yield return version;
                 }
@@ -507,8 +511,7 @@ namespace Emby.Server.Implementations.Updates
 
         private async Task PerformPackageInstallation(InstallationInfo package, PluginStatus status, CancellationToken cancellationToken)
         {
-            var extension = Path.GetExtension(package.SourceUrl);
-            if (!string.Equals(extension, ".zip", StringComparison.OrdinalIgnoreCase))
+            if (!Path.GetExtension(package.SourceUrl.AsSpan()).Equals(".zip", StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogError("Only zip packages are supported. {SourceUrl} is not a zip archive.", package.SourceUrl);
                 return;
@@ -524,10 +527,9 @@ namespace Emby.Server.Implementations.Updates
 
             // CA5351: Do Not Use Broken Cryptographic Algorithms
 #pragma warning disable CA5351
-            using var md5 = MD5.Create();
             cancellationToken.ThrowIfCancellationRequested();
 
-            var hash = Convert.ToHexString(md5.ComputeHash(stream));
+            var hash = Convert.ToHexString(await MD5.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
             if (!string.Equals(package.Checksum, hash, StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogError(
@@ -556,9 +558,11 @@ namespace Emby.Server.Implementations.Updates
             }
 
             stream.Position = 0;
-            using var reader = new ZipArchive(stream);
-            reader.ExtractToDirectory(targetDir, true);
-            await _pluginManager.GenerateManifest(package.PackageInfo, package.Version, targetDir, status).ConfigureAwait(false);
+            ZipFile.ExtractToDirectory(stream, targetDir, true);
+
+            // Ensure we create one or populate existing ones with missing data.
+            await _pluginManager.PopulateManifest(package.PackageInfo, package.Version, targetDir, status).ConfigureAwait(false);
+
             _pluginManager.ImportPluginFrom(targetDir);
         }
 
@@ -568,9 +572,9 @@ namespace Emby.Server.Implementations.Updates
                   ?? _pluginManager.Plugins.FirstOrDefault(p => p.Name.Equals(package.Name, StringComparison.OrdinalIgnoreCase) && p.Version.Equals(package.Version));
 
             await PerformPackageInstallation(package, plugin?.Manifest.Status ?? PluginStatus.Active, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Plugin {Action}: {PluginName} {PluginVersion}", plugin == null ? "installed" : "updated", package.Name, package.Version);
+            _logger.LogInformation("Plugin {Action}: {PluginName} {PluginVersion}", plugin is null ? "installed" : "updated", package.Name, package.Version);
 
-            return plugin != null;
+            return plugin is not null;
         }
     }
 }

@@ -1,16 +1,13 @@
-#nullable disable
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.WebSockets;
 using System.Threading;
 using System.Threading.Tasks;
-using MediaBrowser.Common.Extensions;
+using Jellyfin.Api.Extensions;
 using MediaBrowser.Controller.Net;
+using MediaBrowser.Controller.Net.WebSocketMessages.Outbound;
 using MediaBrowser.Controller.Session;
-using MediaBrowser.Model.Net;
-using MediaBrowser.Model.Session;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
@@ -37,11 +34,6 @@ namespace Emby.Server.Implementations.Session
         private const float ForceKeepAliveFactor = 0.75f;
 
         /// <summary>
-        /// Lock used for accessing the KeepAlive cancellation token.
-        /// </summary>
-        private readonly object _keepAliveLock = new object();
-
-        /// <summary>
         /// The WebSocket watchlist.
         /// </summary>
         private readonly HashSet<IWebSocketConnection> _webSockets = new HashSet<IWebSocketConnection>();
@@ -49,17 +41,16 @@ namespace Emby.Server.Implementations.Session
         /// <summary>
         /// Lock used for accessing the WebSockets watchlist.
         /// </summary>
-        private readonly object _webSocketsLock = new object();
+        private readonly Lock _webSocketsLock = new();
 
         private readonly ISessionManager _sessionManager;
         private readonly ILogger<SessionWebSocketListener> _logger;
         private readonly ILoggerFactory _loggerFactory;
-        private readonly IAuthorizationContext _authorizationContext;
 
         /// <summary>
         /// The KeepAlive cancellation token.
         /// </summary>
-        private CancellationTokenSource _keepAliveCancellationToken;
+        private System.Timers.Timer _keepAlive;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SessionWebSocketListener" /> class.
@@ -67,23 +58,42 @@ namespace Emby.Server.Implementations.Session
         /// <param name="logger">The logger.</param>
         /// <param name="sessionManager">The session manager.</param>
         /// <param name="loggerFactory">The logger factory.</param>
-        /// <param name="authorizationContext">The authorization context.</param>
         public SessionWebSocketListener(
             ILogger<SessionWebSocketListener> logger,
             ISessionManager sessionManager,
-            ILoggerFactory loggerFactory,
-            IAuthorizationContext authorizationContext)
+            ILoggerFactory loggerFactory)
         {
             _logger = logger;
             _sessionManager = sessionManager;
             _loggerFactory = loggerFactory;
-            _authorizationContext = authorizationContext;
+            _keepAlive = new System.Timers.Timer(TimeSpan.FromSeconds(WebSocketLostTimeout * IntervalFactor))
+            {
+                AutoReset = true,
+                Enabled = false
+            };
+            _keepAlive.Elapsed += KeepAliveSockets;
         }
 
         /// <inheritdoc />
         public void Dispose()
         {
-            StopKeepAlive();
+            if (_keepAlive is not null)
+            {
+                _keepAlive.Stop();
+                _keepAlive.Elapsed -= KeepAliveSockets;
+                _keepAlive.Dispose();
+                _keepAlive = null!;
+            }
+
+            lock (_webSocketsLock)
+            {
+                foreach (var webSocket in _webSockets)
+                {
+                    webSocket.Closed -= OnWebSocketClosed;
+                }
+
+                _webSockets.Clear();
+            }
         }
 
         /// <summary>
@@ -98,7 +108,7 @@ namespace Emby.Server.Implementations.Session
         public async Task ProcessWebSocketConnectedAsync(IWebSocketConnection connection, HttpContext httpContext)
         {
             var session = await GetSession(httpContext, connection.RemoteEndPoint?.ToString()).ConfigureAwait(false);
-            if (session != null)
+            if (session is not null)
             {
                 EnsureController(session, connection);
                 await KeepAliveWebSocket(connection).ConfigureAwait(false);
@@ -109,23 +119,20 @@ namespace Emby.Server.Implementations.Session
             }
         }
 
-        private async Task<SessionInfo> GetSession(HttpContext httpContext, string remoteEndpoint)
+        private async Task<SessionInfo?> GetSession(HttpContext httpContext, string? remoteEndpoint)
         {
-            var authorizationInfo = await _authorizationContext.GetAuthorizationInfo(httpContext)
-                .ConfigureAwait(false);
-
-            if (!authorizationInfo.IsAuthenticated)
+            if (!httpContext.User.Identity?.IsAuthenticated ?? false)
             {
                 return null;
             }
 
-            var deviceId = authorizationInfo.DeviceId;
+            var deviceId = httpContext.User.GetDeviceId();
             if (httpContext.Request.Query.TryGetValue("deviceId", out var queryDeviceId))
             {
                 deviceId = queryDeviceId;
             }
 
-            return await _sessionManager.GetSessionByAuthenticationToken(authorizationInfo.Token, deviceId, remoteEndpoint)
+            return await _sessionManager.GetSessionByAuthenticationToken(httpContext.User.GetToken(), deviceId, remoteEndpoint)
                 .ConfigureAwait(false);
         }
 
@@ -145,8 +152,13 @@ namespace Emby.Server.Implementations.Session
         /// </summary>
         /// <param name="sender">The WebSocket.</param>
         /// <param name="e">The event arguments.</param>
-        private void OnWebSocketClosed(object sender, EventArgs e)
+        private void OnWebSocketClosed(object? sender, EventArgs e)
         {
+            if (sender is null)
+            {
+                return;
+            }
+
             var webSocket = (IWebSocketConnection)sender;
             _logger.LogDebug("WebSocket {0} is closed.", webSocket);
             RemoveWebSocket(webSocket);
@@ -169,7 +181,7 @@ namespace Emby.Server.Implementations.Session
                 webSocket.Closed += OnWebSocketClosed;
                 webSocket.LastKeepAliveDate = DateTime.UtcNow;
 
-                StartKeepAlive();
+                _keepAlive.Start();
             }
 
             // Notify WebSocket about timeout
@@ -191,66 +203,26 @@ namespace Emby.Server.Implementations.Session
         {
             lock (_webSocketsLock)
             {
-                if (!_webSockets.Remove(webSocket))
+                if (_webSockets.Remove(webSocket))
                 {
-                    _logger.LogWarning("WebSocket {0} not on watchlist.", webSocket);
+                    webSocket.Closed -= OnWebSocketClosed;
                 }
                 else
                 {
-                    webSocket.Closed -= OnWebSocketClosed;
+                    _logger.LogWarning("WebSocket {0} not on watchlist.", webSocket);
                 }
-            }
-        }
 
-        /// <summary>
-        /// Starts the KeepAlive watcher.
-        /// </summary>
-        private void StartKeepAlive()
-        {
-            lock (_keepAliveLock)
-            {
-                if (_keepAliveCancellationToken == null)
+                if (_webSockets.Count == 0)
                 {
-                    _keepAliveCancellationToken = new CancellationTokenSource();
-                    // Start KeepAlive watcher
-                    _ = RepeatAsyncCallbackEvery(
-                        KeepAliveSockets,
-                        TimeSpan.FromSeconds(WebSocketLostTimeout * IntervalFactor),
-                        _keepAliveCancellationToken.Token);
+                    _keepAlive.Stop();
                 }
-            }
-        }
-
-        /// <summary>
-        /// Stops the KeepAlive watcher.
-        /// </summary>
-        private void StopKeepAlive()
-        {
-            lock (_keepAliveLock)
-            {
-                if (_keepAliveCancellationToken != null)
-                {
-                    _keepAliveCancellationToken.Cancel();
-                    _keepAliveCancellationToken.Dispose();
-                    _keepAliveCancellationToken = null;
-                }
-            }
-
-            lock (_webSocketsLock)
-            {
-                foreach (var webSocket in _webSockets)
-                {
-                    webSocket.Closed -= OnWebSocketClosed;
-                }
-
-                _webSockets.Clear();
             }
         }
 
         /// <summary>
         /// Checks status of KeepAlive of WebSockets.
         /// </summary>
-        private async Task KeepAliveSockets()
+        private async void KeepAliveSockets(object? o, EventArgs? e)
         {
             List<IWebSocketConnection> inactive;
             List<IWebSocketConnection> lost;
@@ -296,11 +268,6 @@ namespace Emby.Server.Implementations.Session
                         RemoveWebSocket(webSocket);
                     }
                 }
-
-                if (_webSockets.Count == 0)
-                {
-                    StopKeepAlive();
-                }
             }
         }
 
@@ -312,36 +279,8 @@ namespace Emby.Server.Implementations.Session
         private Task SendForceKeepAlive(IWebSocketConnection webSocket)
         {
             return webSocket.SendAsync(
-                new WebSocketMessage<int>
-                {
-                    MessageType = SessionMessageType.ForceKeepAlive,
-                    Data = WebSocketLostTimeout
-                },
+                new ForceKeepAliveMessage(WebSocketLostTimeout),
                 CancellationToken.None);
-        }
-
-        /// <summary>
-        /// Runs a given async callback once every specified interval time, until cancelled.
-        /// </summary>
-        /// <param name="callback">The async callback.</param>
-        /// <param name="interval">The interval time.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>Task.</returns>
-        private async Task RepeatAsyncCallbackEvery(Func<Task> callback, TimeSpan interval, CancellationToken cancellationToken)
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                await callback().ConfigureAwait(false);
-
-                try
-                {
-                    await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
-                }
-                catch (TaskCanceledException)
-                {
-                    return;
-                }
-            }
         }
     }
 }

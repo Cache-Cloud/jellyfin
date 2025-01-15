@@ -73,6 +73,13 @@ namespace Jellyfin.Naming.Tests.TV
         [InlineData("[BBT-RMX] Ranma ½ - 154 [50AC421A].mkv", 154)] // hyphens in the pre-name info, triple digit episode number
         [InlineData("Season 2/Episode 21 - 94 Meetings.mp4", 21)] // Title starts with a number
         [InlineData("/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv/The.Legend.of.Condor.Heroes.2017.E07.V2.web-dl.1080p.h264.aac-hdctv.mkv", 7)]
+        [InlineData("Season 3/The Series Season 3 Episode 9 - The title.avi", 9)]
+        [InlineData("Season 3/The Series S3 E9 - The title.avi", 9)]
+        [InlineData("Season 3/S003 E009.avi", 9)]
+        [InlineData("Season 3/Season 3 Episode 9.avi", 9)]
+        [InlineData("[VCB-Studio] Re Zero kara Hajimeru Isekai Seikatsu [21][Ma10p_1080p][x265_flac].mkv", 21)]
+        [InlineData("[CASO&Sumisora][Oda_Nobuna_no_Yabou][04][BDRIP][1920x1080][x264_AAC][7620E503].mp4", 4)]
+
         // [InlineData("Case Closed (1996-2007)/Case Closed - 317.mkv", 317)] // triple digit episode number
         // TODO: [InlineData("Season 2/16 12 Some Title.avi", 16)]
         // TODO: [InlineData("Season 4/Uchuu.Senkan.Yamato.2199.E03.avi", 3)]

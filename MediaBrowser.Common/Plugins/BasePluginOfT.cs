@@ -4,6 +4,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
@@ -20,12 +21,12 @@ namespace MediaBrowser.Common.Plugins
         /// <summary>
         /// The configuration sync lock.
         /// </summary>
-        private readonly object _configurationSyncLock = new object();
+        private readonly Lock _configurationSyncLock = new();
 
         /// <summary>
         /// The configuration save lock.
         /// </summary>
-        private readonly object _configurationSaveLock = new object();
+        private readonly Lock _configurationSaveLock = new();
 
         /// <summary>
         /// The configuration.
@@ -47,10 +48,10 @@ namespace MediaBrowser.Common.Plugins
             var assemblyFilePath = assembly.Location;
 
             var dataFolderPath = Path.Combine(ApplicationPaths.PluginsPath, Path.GetFileNameWithoutExtension(assemblyFilePath));
-            if (Version != null && !Directory.Exists(dataFolderPath))
+            if (Version is not null && !Directory.Exists(dataFolderPath))
             {
                 // Try again with the version number appended to the folder name.
-                dataFolderPath += "_" + Version.ToString();
+                dataFolderPath += "_" + Version;
             }
 
             SetAttributes(assemblyFilePath, dataFolderPath, assemblyName.Version);
@@ -103,7 +104,7 @@ namespace MediaBrowser.Common.Plugins
             get
             {
                 // Lazy load
-                if (_configuration == null)
+                if (_configuration is null)
                 {
                     lock (_configurationSyncLock)
                     {
@@ -164,10 +165,7 @@ namespace MediaBrowser.Common.Plugins
         /// <inheritdoc />
         public virtual void UpdateConfiguration(BasePluginConfiguration configuration)
         {
-            if (configuration == null)
-            {
-                throw new ArgumentNullException(nameof(configuration));
-            }
+            ArgumentNullException.ThrowIfNull(configuration);
 
             Configuration = (TConfigurationType)configuration;
 
@@ -196,7 +194,7 @@ namespace MediaBrowser.Common.Plugins
             }
             catch
             {
-                var config = (TConfigurationType)Activator.CreateInstance(typeof(TConfigurationType));
+                var config = Activator.CreateInstance<TConfigurationType>();
                 SaveConfiguration(config);
                 return config;
             }

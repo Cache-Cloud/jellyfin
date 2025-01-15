@@ -1,8 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Jellyfin.Data.Entities;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -53,14 +53,17 @@ namespace Jellyfin.XbmcMetadata.Tests.Parsers
 
             var userData = new Mock<IUserDataManager>();
             userData.Setup(x => x.GetUserData(_testUser, It.IsAny<BaseItem>()))
-                .Returns(new UserItemData());
+                .Returns(new UserItemData()
+                {
+                    Key = "Something"
+                });
 
             var directoryService = new Mock<IDirectoryService>();
             _localImageFileMetadata = new FileSystemMetadata()
             {
                 Exists = true,
                 FullName = OperatingSystem.IsWindows() ?
-                    "C:\\media\\movies\\Justice League (2017).jpg"
+                    @"C:\media\movies\Justice League (2017).jpg"
                     : "/media/movies/Justice League (2017).jpg"
             };
             directoryService.Setup(x => x.GetFile(_localImageFileMetadata.FullName))
@@ -118,18 +121,18 @@ namespace Jellyfin.XbmcMetadata.Tests.Parsers
 
             Assert.Equal(20, result.People.Count);
 
-            var writers = result.People.Where(x => x.Type == PersonType.Writer).ToArray();
+            var writers = result.People.Where(x => x.Type == PersonKind.Writer).ToArray();
             Assert.Equal(3, writers.Length);
             var writerNames = writers.Select(x => x.Name);
             Assert.Contains("Jerry Siegel", writerNames);
             Assert.Contains("Joe Shuster", writerNames);
             Assert.Contains("Test", writerNames);
 
-            var directors = result.People.Where(x => x.Type == PersonType.Director).ToArray();
+            var directors = result.People.Where(x => x.Type == PersonKind.Director).ToArray();
             Assert.Single(directors);
             Assert.Equal("Zack Snyder", directors[0].Name);
 
-            var actors = result.People.Where(x => x.Type == PersonType.Actor).ToArray();
+            var actors = result.People.Where(x => x.Type == PersonKind.Actor).ToArray();
             Assert.Equal(15, actors.Length);
 
             // Only test one actor
@@ -139,7 +142,7 @@ namespace Jellyfin.XbmcMetadata.Tests.Parsers
             Assert.Equal(5, aquaman!.SortOrder);
             Assert.Equal("https://m.media-amazon.com/images/M/MV5BMTI5MTU5NjM1MV5BMl5BanBnXkFtZTcwODc4MDk0Mw@@._V1_SX1024_SY1024_.jpg", aquaman!.ImageUrl);
 
-            var lyricist = result.People.FirstOrDefault(x => x.Type == PersonType.Lyricist);
+            var lyricist = result.People.FirstOrDefault(x => x.Type == PersonKind.Lyricist);
             Assert.NotNull(lyricist);
             Assert.Equal("Test Lyricist", lyricist!.Name);
 
@@ -217,7 +220,7 @@ namespace Jellyfin.XbmcMetadata.Tests.Parsers
 
             _parser.Fetch(result, "Test Data/Fanart.nfo", CancellationToken.None);
 
-            Assert.Single(result.RemoteImages.Where(x => x.Type == ImageType.Backdrop));
+            Assert.Single(result.RemoteImages, x => x.Type == ImageType.Backdrop);
             Assert.Equal("https://assets.fanart.tv/fanart/movies/141052/moviebackground/justice-league-5a5332c7b5e77.jpg", result.RemoteImages.First(x => x.Type == ImageType.Backdrop).Url);
         }
 

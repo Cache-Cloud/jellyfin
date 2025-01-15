@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Entities;
+using Jellyfin.Extensions;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Controller.SyncPlay;
@@ -197,7 +198,7 @@ namespace Emby.Server.Implementations.SyncPlay
         private bool HasAccessToQueue(User user, IReadOnlyList<Guid> queue)
         {
             // Check if queue is empty.
-            if (queue == null || queue.Count == 0)
+            if (queue is null || queue.Count == 0)
             {
                 return true;
             }
@@ -217,7 +218,7 @@ namespace Emby.Server.Implementations.SyncPlay
         private bool AllUsersHaveAccessToQueue(IReadOnlyList<Guid> queue)
         {
             // Check if queue is empty.
-            if (queue == null || queue.Count == 0)
+            if (queue is null || queue.Count == 0)
             {
                 return true;
             }
@@ -251,7 +252,7 @@ namespace Emby.Server.Implementations.SyncPlay
             GroupName = request.GroupName;
             AddSession(session);
 
-            var sessionIsPlayingAnItem = session.FullNowPlayingItem != null;
+            var sessionIsPlayingAnItem = session.FullNowPlayingItem is not null;
 
             RestartCurrentItem();
 
@@ -553,7 +554,7 @@ namespace Emby.Server.Implementations.SyncPlay
             if (playingItemRemoved)
             {
                 var itemId = PlayQueue.GetPlayingItemId();
-                if (!itemId.Equals(default))
+                if (!itemId.IsEmpty())
                 {
                     var item = _libraryManager.GetItemById(itemId);
                     RunTimeTicks = item.RunTimeTicks ?? 0;
@@ -620,10 +621,8 @@ namespace Emby.Server.Implementations.SyncPlay
                 RestartCurrentItem();
                 return true;
             }
-            else
-            {
-                return false;
-            }
+
+            return false;
         }
 
         /// <inheritdoc />
@@ -637,10 +636,8 @@ namespace Emby.Server.Implementations.SyncPlay
                 RestartCurrentItem();
                 return true;
             }
-            else
-            {
-                return false;
-            }
+
+            return false;
         }
 
         /// <inheritdoc />

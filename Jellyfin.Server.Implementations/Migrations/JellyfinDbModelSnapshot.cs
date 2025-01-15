@@ -5,17 +5,17 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
+#nullable disable
+
 namespace Jellyfin.Server.Implementations.Migrations
 {
-    [DbContext(typeof(JellyfinDb))]
+    [DbContext(typeof(JellyfinDbContext))]
     partial class JellyfinDbModelSnapshot : ModelSnapshot
     {
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder
-                .HasDefaultSchema("jellyfin")
-                .HasAnnotation("ProductVersion", "5.0.7");
+            modelBuilder.HasAnnotation("ProductVersion", "8.0.8");
 
             modelBuilder.Entity("Jellyfin.Data.Entities.AccessSchedule", b =>
                 {
@@ -84,6 +84,8 @@ namespace Jellyfin.Server.Implementations.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("DateCreated");
 
                     b.ToTable("ActivityLogs");
                 });
@@ -268,6 +270,33 @@ namespace Jellyfin.Server.Implementations.Migrations
                     b.ToTable("ItemDisplayPreferences");
                 });
 
+            modelBuilder.Entity("Jellyfin.Data.Entities.MediaSegment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("EndTicks")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("ItemId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SegmentProviderId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("StartTicks")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("MediaSegments");
+                });
+
             modelBuilder.Entity("Jellyfin.Data.Entities.Permission", b =>
                 {
                     b.Property<int>("Id")
@@ -440,6 +469,37 @@ namespace Jellyfin.Server.Implementations.Migrations
                     b.ToTable("DeviceOptions");
                 });
 
+            modelBuilder.Entity("Jellyfin.Data.Entities.TrickplayInfo", b =>
+                {
+                    b.Property<Guid>("ItemId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Width")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Bandwidth")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Height")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Interval")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ThumbnailCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TileHeight")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TileWidth")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("ItemId", "Width");
+
+                    b.ToTable("TrickplayInfos");
+                });
+
             modelBuilder.Entity("Jellyfin.Data.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
@@ -455,15 +515,15 @@ namespace Jellyfin.Server.Implementations.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("CastReceiverId")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("DisplayCollectionsView")
                         .HasColumnType("INTEGER");
 
                     b.Property<bool>("DisplayMissingEpisodes")
                         .HasColumnType("INTEGER");
-
-                    b.Property<string>("EasyPassword")
-                        .HasMaxLength(65535)
-                        .HasColumnType("TEXT");
 
                     b.Property<bool>("EnableAutoLogin")
                         .HasColumnType("INTEGER");

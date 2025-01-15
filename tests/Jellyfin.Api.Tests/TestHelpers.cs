@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
@@ -36,7 +36,7 @@ namespace Jellyfin.Api.Tests
             user.SetPermission(PermissionKind.IsAdministrator, role.Equals(UserRoles.Administrator, StringComparison.OrdinalIgnoreCase));
 
             // Add access schedules if set.
-            if (accessSchedules != null)
+            if (accessSchedules is not null)
             {
                 foreach (var accessSchedule in accessSchedules)
                 {

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
@@ -87,7 +87,7 @@ public class CacheDecorator : IKeyframeExtractor
         {
             var bytes = File.ReadAllBytes(cachePath);
             cachedResult = JsonSerializer.Deserialize<KeyframeData>(bytes, _jsonOptions);
-            return cachedResult != null;
+            return cachedResult is not null;
         }
 
         cachedResult = null;

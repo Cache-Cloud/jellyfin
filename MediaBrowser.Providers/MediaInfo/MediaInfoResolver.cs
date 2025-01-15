@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Emby.Naming.Common;
 using Emby.Naming.ExternalFiles;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Dlna;
@@ -120,6 +121,7 @@ namespace MediaBrowser.Providers.MediaInfo
                                 mediaStream.Index = startIndex++;
                                 mediaStream.IsDefault = pathInfo.IsDefault || mediaStream.IsDefault;
                                 mediaStream.IsForced = pathInfo.IsForced || mediaStream.IsForced;
+                                mediaStream.IsHearingImpaired = pathInfo.IsHearingImpaired || mediaStream.IsHearingImpaired;
 
                                 mediaStreams.Add(MergeMetadata(mediaStream, pathInfo));
                             }
@@ -147,7 +149,49 @@ namespace MediaBrowser.Providers.MediaInfo
                 }
             }
 
-            return mediaStreams.AsReadOnly();
+            return mediaStreams;
+        }
+
+        /// <summary>
+        /// Retrieves the external streams for the provided audio.
+        /// </summary>
+        /// <param name="audio">The <see cref="Audio"/> object to search external streams for.</param>
+        /// <param name="startIndex">The stream index to start adding external streams at.</param>
+        /// <param name="directoryService">The directory service to search for files.</param>
+        /// <param name="clearCache">True if the directory service cache should be cleared before searching.</param>
+        /// <returns>The external streams located.</returns>
+        public IReadOnlyList<MediaStream> GetExternalStreams(
+            Audio audio,
+            int startIndex,
+            IDirectoryService directoryService,
+            bool clearCache)
+        {
+            if (!audio.IsFileProtocol)
+            {
+                return Array.Empty<MediaStream>();
+            }
+
+            var pathInfos = GetExternalFiles(audio, directoryService, clearCache);
+
+            if (pathInfos.Count == 0)
+            {
+                return Array.Empty<MediaStream>();
+            }
+
+            var mediaStreams = new MediaStream[pathInfos.Count];
+
+            for (var i = 0; i < pathInfos.Count; i++)
+            {
+                mediaStreams[i] = new MediaStream
+                {
+                    Type = MediaStreamType.Lyric,
+                    Path = pathInfos[i].Path,
+                    Language = pathInfos[i].Language,
+                    Index = startIndex++
+                };
+            }
+
+            return mediaStreams;
         }
 
         /// <summary>
@@ -174,15 +218,15 @@ namespace MediaBrowser.Providers.MediaInfo
                 return Array.Empty<ExternalPathParserResult>();
             }
 
-            var files = directoryService.GetFilePaths(folder, clearCache).ToList();
+            var files = directoryService.GetFilePaths(folder, clearCache, true).ToList();
             files.Remove(video.Path);
             var internalMetadataPath = video.GetInternalMetadataPath();
             if (_fileSystem.DirectoryExists(internalMetadataPath))
             {
-                files.AddRange(directoryService.GetFilePaths(internalMetadataPath, clearCache));
+                files.AddRange(directoryService.GetFilePaths(internalMetadataPath, clearCache, true));
             }
 
-            if (!files.Any())
+            if (files.Count == 0)
             {
                 return Array.Empty<ExternalPathParserResult>();
             }
@@ -198,7 +242,59 @@ namespace MediaBrowser.Providers.MediaInfo
                 {
                     var externalPathInfo = _externalPathParser.ParseFile(file, fileNameWithoutExtension[prefix.Length..].ToString());
 
-                    if (externalPathInfo != null)
+                    if (externalPathInfo is not null)
+                    {
+                        externalPathInfos.Add(externalPathInfo);
+                    }
+                }
+            }
+
+            return externalPathInfos;
+        }
+
+        /// <summary>
+        /// Returns the external file infos for the given audio.
+        /// </summary>
+        /// <param name="audio">The <see cref="Audio"/> object to search external files for.</param>
+        /// <param name="directoryService">The directory service to search for files.</param>
+        /// <param name="clearCache">True if the directory service cache should be cleared before searching.</param>
+        /// <returns>The external file paths located.</returns>
+        public IReadOnlyList<ExternalPathParserResult> GetExternalFiles(
+            Audio audio,
+            IDirectoryService directoryService,
+            bool clearCache)
+        {
+            if (!audio.IsFileProtocol)
+            {
+                return Array.Empty<ExternalPathParserResult>();
+            }
+
+            string folder = audio.ContainingFolderPath;
+            var files = directoryService.GetFilePaths(folder, clearCache, true).ToList();
+            files.Remove(audio.Path);
+            var internalMetadataPath = audio.GetInternalMetadataPath();
+            if (_fileSystem.DirectoryExists(internalMetadataPath))
+            {
+                files.AddRange(directoryService.GetFilePaths(internalMetadataPath, clearCache, true));
+            }
+
+            if (files.Count == 0)
+            {
+                return Array.Empty<ExternalPathParserResult>();
+            }
+
+            var externalPathInfos = new List<ExternalPathParserResult>();
+            ReadOnlySpan<char> prefix = audio.FileNameWithoutExtension;
+            foreach (var file in files)
+            {
+                var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(file.AsSpan());
+                if (fileNameWithoutExtension.Length >= prefix.Length
+                    && prefix.Equals(fileNameWithoutExtension[..prefix.Length], StringComparison.OrdinalIgnoreCase)
+                    && (fileNameWithoutExtension.Length == prefix.Length || _namingOptions.MediaFlagDelimiters.Contains(fileNameWithoutExtension[prefix.Length])))
+                {
+                    var externalPathInfo = _externalPathParser.ParseFile(file, fileNameWithoutExtension[prefix.Length..].ToString());
+
+                    if (externalPathInfo is not null)
                     {
                         externalPathInfos.Add(externalPathInfo);
                     }

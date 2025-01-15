@@ -34,6 +34,11 @@ namespace MediaBrowser.Model.Querying
         /// </summary>
         Chapters,
 
+        /// <summary>
+        /// The trickplay manifest.
+        /// </summary>
+        Trickplay,
+
         ChildCount,
 
         /// <summary>
@@ -126,7 +131,7 @@ namespace MediaBrowser.Model.Querying
         ProductionLocations,
 
         /// <summary>
-        /// Imdb, tmdb, etc.
+        /// The ids from IMDb, TMDb, etc.
         /// </summary>
         ProviderIds,
 
@@ -169,13 +174,6 @@ namespace MediaBrowser.Model.Querying
         /// The studios of the item.
         /// </summary>
         Studios,
-
-        BasicSyncInfo,
-
-        /// <summary>
-        /// The synchronize information.
-        /// </summary>
-        SyncInfo,
 
         /// <summary>
         /// The taglines of the item.

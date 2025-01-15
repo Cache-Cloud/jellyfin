@@ -4,9 +4,10 @@
     <title>TMDb</title>
 </head>
 <body>
-    <div data-role="page" class="page type-interior pluginConfigurationPage configPage" data-require="emby-input,emby-button,emby-checkbox">
+    <div id="configPage" data-role="page" class="page type-interior pluginConfigurationPage configPage" data-require="emby-input,emby-button,emby-checkbox">
         <div data-role="content">
             <div class="content-primary">
+                <h1>TMDb</h1>
                 <form class="configForm">
                     <label class="checkboxContainer">
                         <input is="emby-checkbox" type="checkbox" id="includeAdult" />
@@ -63,8 +64,17 @@
 
                     var clientConfig, pluginConfig;
                     var configureImageScaling = function() {
-                        if (clientConfig === null || pluginConfig === null) {
+                        if (clientConfig === undefined || pluginConfig === undefined) {
                             return;
+                        }
+                        if (Object.keys(clientConfig).length === 0) {
+                            clientConfig = {
+                                PosterSizes: [pluginConfig.PosterSize],
+                                BackdropSizes: [pluginConfig.BackdropSize],
+                                LogoSizes: [pluginConfig.LogoSize],
+                                ProfileSizes: [pluginConfig.ProfileSize],
+                                StillSizes: [pluginConfig.StillSize]
+                            };
                         }
 
                         var sizeOptionsGenerator = function (size) {
@@ -103,6 +113,15 @@
                     ApiClient.fetch(request).then(function (config) {
                         clientConfig = config;
                         configureImageScaling();
+                    }, function (error) {
+                        error.text().then(function (contents) {
+                            Dashboard.alert({
+                                title: error.statusText,
+                                message: contents
+                            });
+                            clientConfig = {};
+                            configureImageScaling();
+                        });
                     });
 
                     ApiClient.getPluginConfiguration(PluginConfig.pluginId).then(function (config) {

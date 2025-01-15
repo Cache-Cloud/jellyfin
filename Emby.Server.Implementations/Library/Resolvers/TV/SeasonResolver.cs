@@ -54,7 +54,8 @@ namespace Emby.Server.Implementations.Library.Resolvers.TV
                 {
                     IndexNumber = seasonParserResult.SeasonNumber,
                     SeriesId = series.Id,
-                    SeriesName = series.Name
+                    SeriesName = series.Name,
+                    Path = seasonParserResult.IsSeasonFolder ? path : null
                 };
 
                 if (!season.IndexNumber.HasValue || !seasonParserResult.IsSeasonFolder)
@@ -62,11 +63,11 @@ namespace Emby.Server.Implementations.Library.Resolvers.TV
                     var resolver = new Naming.TV.EpisodeResolver(namingOptions);
 
                     var folderName = System.IO.Path.GetFileName(path);
-                    var testPath = "\\\\test\\" + folderName;
+                    var testPath = @"\\test\" + folderName;
 
                     var episodeInfo = resolver.Resolve(testPath, true);
 
-                    if (episodeInfo?.EpisodeNumber != null && episodeInfo.SeasonNumber.HasValue)
+                    if (episodeInfo?.EpisodeNumber is not null && episodeInfo.SeasonNumber.HasValue)
                     {
                         _logger.LogDebug(
                             "Found folder underneath series with episode number: {0}. Season {1}. Episode {2}",
@@ -78,10 +79,9 @@ namespace Emby.Server.Implementations.Library.Resolvers.TV
                     }
                 }
 
-                if (season.IndexNumber.HasValue)
+                if (season.IndexNumber.HasValue && string.IsNullOrEmpty(season.Name))
                 {
                     var seasonNumber = season.IndexNumber.Value;
-
                     season.Name = seasonNumber == 0 ?
                         args.LibraryOptions.SeasonZeroDisplayName :
                         string.Format(

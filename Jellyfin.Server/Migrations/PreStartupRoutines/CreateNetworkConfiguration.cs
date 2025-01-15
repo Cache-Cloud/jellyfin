@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Xml;
 using System.Xml.Serialization;
@@ -114,9 +114,7 @@ public class CreateNetworkConfiguration : IMigrationRoutine
 
         public bool IgnoreVirtualInterfaces { get; set; } = true;
 
-        public string VirtualInterfaceNames { get; set; } = "vEthernet*";
-
-        public bool TrustAllIP6Interfaces { get; set; }
+        public string[] VirtualInterfaceNames { get; set; } = new string[] { "veth" };
 
         public string[] PublishedServerUriBySubnet { get; set; } = Array.Empty<string>();
 
@@ -134,5 +132,4 @@ public class CreateNetworkConfiguration : IMigrationRoutine
 
         public string[] KnownProxies { get; set; } = Array.Empty<string>();
     }
-#pragma warning restore
 }

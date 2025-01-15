@@ -2,9 +2,7 @@
 
 #pragma warning disable CA1002, CA2227, CS1591
 
-using System;
 using System.Collections.Generic;
-using System.Globalization;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Entities;
 
@@ -33,8 +31,6 @@ namespace MediaBrowser.Controller.Providers
             set => _remoteImages = value;
         }
 
-        public List<UserItemData> UserDataList { get; set; }
-
         public List<PersonInfo> People { get; set; }
 
         public bool HasMetadata { get; set; }
@@ -59,7 +55,7 @@ namespace MediaBrowser.Controller.Providers
         /// </summary>
         public void ResetPeople()
         {
-            if (People == null)
+            if (People is null)
             {
                 People = new List<PersonInfo>();
             }
@@ -67,33 +63,6 @@ namespace MediaBrowser.Controller.Providers
             {
                 People.Clear();
             }
-        }
-
-        public UserItemData GetOrAddUserData(string userId)
-        {
-            UserDataList ??= new List<UserItemData>();
-
-            UserItemData userData = null;
-
-            foreach (var i in UserDataList)
-            {
-                if (string.Equals(userId, i.UserId.ToString("N", CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
-                {
-                    userData = i;
-                }
-            }
-
-            if (userData == null)
-            {
-                userData = new UserItemData()
-                {
-                    UserId = new Guid(userId)
-                };
-
-                UserDataList.Add(userData);
-            }
-
-            return userData;
         }
     }
 }

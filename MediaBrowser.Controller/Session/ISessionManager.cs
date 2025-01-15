@@ -7,9 +7,9 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Entities.Security;
-using Jellyfin.Data.Events;
 using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Session;
 using MediaBrowser.Model.SyncPlay;
 
@@ -56,16 +56,6 @@ namespace MediaBrowser.Controller.Session
         /// Occurs when [capabilities changed].
         /// </summary>
         event EventHandler<SessionEventArgs> CapabilitiesChanged;
-
-        /// <summary>
-        /// Occurs when [authentication failed].
-        /// </summary>
-        event EventHandler<GenericEventArgs<AuthenticationRequest>> AuthenticationFailed;
-
-        /// <summary>
-        /// Occurs when [authentication succeeded].
-        /// </summary>
-        event EventHandler<GenericEventArgs<AuthenticationResult>> AuthenticationSucceeded;
 
         /// <summary>
         /// Gets the sessions.
@@ -122,7 +112,8 @@ namespace MediaBrowser.Controller.Session
         /// Reports the session ended.
         /// </summary>
         /// <param name="sessionId">The session identifier.</param>
-        void ReportSessionEnded(string sessionId);
+        /// <returns>Task.</returns>
+        ValueTask ReportSessionEnded(string sessionId);
 
         /// <summary>
         /// Sends the general command.
@@ -244,20 +235,6 @@ namespace MediaBrowser.Controller.Session
         Task SendRestartRequiredNotification(CancellationToken cancellationToken);
 
         /// <summary>
-        /// Sends the server shutdown notification.
-        /// </summary>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>Task.</returns>
-        Task SendServerShutdownNotification(CancellationToken cancellationToken);
-
-        /// <summary>
-        /// Sends the server restart notification.
-        /// </summary>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>Task.</returns>
-        Task SendServerRestartNotification(CancellationToken cancellationToken);
-
-        /// <summary>
         /// Adds the additional user.
         /// </summary>
         /// <param name="sessionId">The session identifier.</param>
@@ -315,6 +292,17 @@ namespace MediaBrowser.Controller.Session
         /// <param name="version">The version.</param>
         /// <returns>SessionInfo.</returns>
         SessionInfo GetSession(string deviceId, string client, string version);
+
+        /// <summary>
+        /// Gets all sessions available to a user.
+        /// </summary>
+        /// <param name="userId">The session identifier.</param>
+        /// <param name="deviceId">The device id.</param>
+        /// <param name="activeWithinSeconds">Active within session limit.</param>
+        /// <param name="controllableUserToCheck">Filter for sessions remote controllable for this user.</param>
+        /// <param name="isApiKey">Is the request authenticated with API key.</param>
+        /// <returns>IReadOnlyList{SessionInfoDto}.</returns>
+        IReadOnlyList<SessionInfoDto> GetSessions(Guid userId, string deviceId, int? activeWithinSeconds, Guid? controllableUserToCheck, bool isApiKey);
 
         /// <summary>
         /// Gets the session by authentication token.
